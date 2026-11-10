@@ -280,13 +280,17 @@ async def transcribe_wav(
     model: Optional[str] = None,
     language_code: Optional[str] = None,
     audio_format: Optional[str] = None,
-    preferred_language: str = "hi-IN",
+    preferred_language: Optional[str] = None,
+    language_candidates: Optional[str] = None,
     keyterms: str = DEFAULT_KEYTERMS,
 ) -> Dict[str, Any]:
-    """POST /stt/v3 — 16kHz mono 16-bit PCM WAV -> Hinglish transcript."""
-    m = model or CONFIG.stt_model
+    """POST /stt/v3 — 16kHz mono 16-bit PCM WAV -> transcript (hi-IN / ta-IN / indic-auto)."""
     lang = language_code or CONFIG.stt_language
+    m = model or CONFIG.stt_model
     fmt = audio_format or CONFIG.stt_format
+    if lang == "indic-auto" and m != "prisma-v3.0":
+        m = "prisma-v3.0"
+    pref = preferred_language or ("hi-IN" if lang == "indic-auto" else lang)
     started = time.perf_counter()
 
     if not live_mode():
@@ -305,9 +309,11 @@ async def transcribe_wav(
         "model": m,
         "language_code": lang,
         "format": fmt,
-        "preferred_language": preferred_language,
+        "preferred_language": pref,
         "keyterms": keyterms,
     }
+    if lang == "indic-auto":
+        data["language_candidates"] = language_candidates or "hi-IN,ta-IN,en-IN"
     headers = {"X-API-Key-ID": CONFIG.api_key}
 
     last_err: str = ""
@@ -339,12 +345,19 @@ async def transcribe_wav(
                 or payload.get("text") or payload.get("Transcript")
                 or nested.get("transcript") or nested.get("text") or ""
             )
+            detected_lang = (
+                payload.get("language")
+                or payload.get("detected_language")
+                or nested.get("language")
+                or nested.get("detected_language")
+            )
             return {
                 "transcript": transcript.strip(),
                 "request_id": str(payload.get("request_id") or payload.get("id") or nested.get("request_id") or ""),
                 "stt_latency_ms": latency,
                 "model": m,
                 "language_code": lang,
+                "language": str(detected_lang or lang),
                 "format": fmt,
                 "fallback": False,
                 "score": payload.get("Confidence") or payload.get("confidence"),
@@ -405,7 +418,7 @@ async def synthesize_speech(
         if hit and is_valid_wav(hit):
             return {"audio": hit, "cached": True,
                     "tts_latency_ms": round((time.perf_counter() - started) * 1000, 1),
-                    "model": mdl, "voice": v, "fallback": False,
+                    "model": mdl, "voice": v, "language": lang, "fallback": False,
                     "chars": len(text), "credit_shield": True}
 
     if not live_mode():
@@ -413,7 +426,7 @@ async def synthesize_speech(
         return {"audio": wav, "cached": False,
                 "tts_latency_ms": round((time.perf_counter() - started) * 1000, 1),
                 "model": mdl + " (fallback voice-tone)",
-                "voice": v, "fallback": True, "chars": len(text),
+                "voice": v, "language": lang, "fallback": True, "chars": len(text),
                 "credit_shield": False}
 
     url = f"{CONFIG.base_url}/api/v1/tts/inference"
@@ -459,7 +472,7 @@ async def synthesize_speech(
             if is_valid_wav(wav):
                 _write_cache(ck, wav)
                 return {"audio": wav, "cached": False, "tts_latency_ms": latency,
-                        "model": mdl, "voice": v, "fallback": False,
+                        "model": mdl, "voice": v, "language": lang, "fallback": False,
                         "chars": len(text), "credit_shield": True}
             last_err = "empty_audio_payload"
             break
@@ -470,7 +483,7 @@ async def synthesize_speech(
     wav = fallback_tts_wav(text, sample_rate=sample_rate)
     return {"audio": wav, "cached": False,
             "tts_latency_ms": round((time.perf_counter() - started) * 1000, 1),
-            "model": mdl + " (fallback voice-tone)", "voice": v,
+            "model": mdl + " (fallback voice-tone)", "voice": v, "language": lang,
             "fallback": True, "chars": len(text),
             "error": last_err, "credit_shield": False}
 

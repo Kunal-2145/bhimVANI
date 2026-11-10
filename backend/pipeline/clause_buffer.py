@@ -17,7 +17,7 @@ from typing import Any, Dict, List
 
 MAX_CLAUSES = 2
 
-# Hinglish hooks that MUST land in Clause 1 (instant empathy/urgency)
+# Hinglish & Tamil hooks that MUST land in Clause 1 (instant empathy/urgency)
 _HOOK_SPLIT_PATTERNS = [
     r"Shukar hai[^.!?]*[.!?]",
     r"Theek hai[^.!?]*[.!?]",
@@ -29,6 +29,15 @@ _HOOK_SPLIT_PATTERNS = [
     r"Arre[^.!?]*[.!?]",
     r"Namaste[^.!?]*[.!?]",
     r"Confirm ho gaya[^.!?]*[.!?]",
+    # Native Tamil fast-empathy hooks
+    r"வணக்கம்[^.!?]*[.!?]",
+    r"நல்லவேளை[^.!?]*[.!?]",
+    r"மிக்க நன்றி[^.!?]*[.!?]",
+    r"சரிங்க[^.!?]*[.!?]",
+    r"புரிந்ததுங்க[^.!?]*[.!?]",
+    r"கண்டிப்பாக[^.!?]*[.!?]",
+    r"உங்கள் உயிர்[^.!?]*[.!?]",
+    r"உறுதி செய்யப்பட்டது[^.!?]*[.!?]",
 ]
 # Protected dotted acronyms / titles that must NEVER trigger a sentence split
 _DOT_ABBREV_RE = re.compile(
@@ -80,12 +89,17 @@ class ClauseBatch:
         return self.clauses
 
 
-def split_into_clauses(reply_text: str, turn_id: str = "t0") -> ClauseBatch:
+def split_into_clauses(reply_text: str, turn_id: str = "t0", language: str = "hi-IN") -> ClauseBatch:
     """Split ONE agent reply into 1 or 2 non-empty clauses (never >2)."""
     text = (reply_text or "").strip()
     batch = ClauseBatch(turn_id=turn_id)
     if not text:
-        batch.add("Ji, boliye main aapki madad kar rahi hoon.", True)
+        fallback = (
+            "வணக்கம், சொல்லுங்கள்—நான் உங்களுக்கு உதவத் தயாராக இருக்கிறேன்."
+            if language == "ta-IN"
+            else "Ji, boliye main aapki madad kar rahi hoon."
+        )
+        batch.add(fallback, True)
         return batch
 
     sentences = _split_sentences(text)
@@ -141,8 +155,8 @@ class ClauseBuffer:
     def __init__(self) -> None:
         self.batches: Dict[str, ClauseBatch] = {}
 
-    def ingest(self, turn_id: str, reply_text: str) -> ClauseBatch:
-        batch = split_into_clauses(reply_text, turn_id)
+    def ingest(self, turn_id: str, reply_text: str, language: str = "hi-IN") -> ClauseBatch:
+        batch = split_into_clauses(reply_text, turn_id, language=language)
         if len(batch.clauses) > MAX_CLAUSES:
             keep = batch.clauses[:MAX_CLAUSES]
             keep[-1]["text"] = " ".join(c["text"] for c in batch.clauses[MAX_CLAUSES - 1:])

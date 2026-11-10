@@ -661,3 +661,182 @@ def test_websocket_streaming_20ms_frames_barge_in_and_clauses():
     finally:
         BRAIN.persist_history = orig_persist
 
+
+# ===========================================================================
+# Native Tamil (ta-IN) End-to-End Language Detection, Extraction & Responses
+# ===========================================================================
+
+def _assert_pure_native_tamil(text: str) -> None:
+    import re
+    assert text.strip(), "Reply text must not be empty"
+    assert re.search(r"[\u0B80-\u0BFF]", text), f"Expected Tamil script in: {text}"
+    assert not re.search(r"[\u0900-\u097F]", text), f"Unexpected Devanagari in Tamil reply: {text}"
+    stray_latin = re.findall(r"\b(?!(?:NH|EV|OK|FNOL)\b)[A-Za-z]{3,}\b", text)
+    assert not stray_latin, f"Unexpected English/Hinglish words {stray_latin} in Tamil reply: {text}"
+
+
+def test_native_tamil_rules_numbers_and_injury_triage():
+    # Safety & injury negation in native Tamil
+    assert triage_injury_and_safety("எங்களுக்கு காயமில்லை, எல்லாரும் நல்லா இருக்கோம்")["injured"] is False
+    assert triage_injury_and_safety("யாருக்கும் அடி படல, பாதுகாப்பாக இருக்கோம்")["injured"] is False
+    assert triage_injury_and_safety("விபத்து ஆகிடுச்சு, இரத்தம் வருது காயம் ஏற்பட்டது")["injured"] is True
+
+    # Spoken Tamil numbers -> 7820 & 3310
+    assert 7820 in parse_spoken_numbers("பாலிசி எண் ஏழாயிரத்து எண்ணூற்று இருபது")
+    assert 3310 in parse_spoken_numbers("மூவாயிரத்து முன்னூற்று பத்து")
+
+    # Parts, road types & drivability in native Tamil
+    assert extract_parts("ஹைவேயில் ரேடியேட்டர் உடைஞ்சிடுச்சு") == ["radiator"]
+    assert extract_parts("பம்பர் இல்ல, ஹெட்லைட் உடைஞ்சிடுச்சு") == ["headlight"]
+    assert extract_road_type("தேசிய நெடுஞ்சாலையில் இருக்கோம்") == "NH"
+    assert extract_road_type("கிராமத்து சாலையில் இருக்கோம்") == "RURAL"
+    assert extract_road_type("சென்னை நகரத்தில் இருக்கோம்") == "CITY"
+    assert detect_drivability(["puncture"], "வண்டியை ஓட்ட முடியாது")[0] is False
+    assert confirm_detection("ஆமாம் உறுதி செய்யுங்க") == "confirm"
+    assert confirm_detection("நில்லுங்க தப்பு, மாத்துங்க") == "correct"
+
+
+def test_brain_native_tamil_multiturn_workflows_and_llm_safety_guard():
+    async def _run():
+        b = Brain(persist_history=False)
+
+        # 1. Start default session, then caller speaks native Tamil -> replies MUST be pure Tamil
+        await b.start_call("ta-flow-b")
+        r1 = await b.process_turn(
+            "ta-flow-b",
+            "வணக்கம், எங்களுக்கு காயமில்லை, ஆனா நெடுஞ்சாலையில் கார் ரேடியேட்டர் உடைஞ்சிடுச்சு, பாலிசி எண் ஏழாயிரத்து எண்ணூற்று இருபது",
+        )
+        assert r1["language"] == "ta-IN"
+        assert r1["entities"]["injured"] is False
+        assert r1["entities"]["policy_number"] == "7820"
+        assert r1["entities"]["road_type"] == "NH"
+        assert r1["entities"]["parts"] == ["radiator"]
+        assert r1["stage"] == "confirm"
+        _assert_pure_native_tamil(r1["reply_text"])
+        assert all(c["language"] == "ta-IN" for c in r1["clauses"])
+
+        # Follow-up ASCII/digit-neutral confirmation stays in Tamil
+        r2 = await b.process_turn("ta-flow-b", "ஆமாம் உறுதி செய்யுங்க")
+        assert r2["language"] == "ta-IN"
+        assert r2["stage"] == "done"
+        _assert_pure_native_tamil(r2["reply_text"])
+
+        # 2. Minor breakdown (Workflow A - NCB Saver) in Tamil
+        await b.start_call("ta-flow-a")
+        ra = await b.process_turn("ta-flow-a", "சென்னை நகரத்தில் டயர் பஞ்சர் ஆகிடுச்சு, காயம் இல்லை")
+        assert ra["language"] == "ta-IN"
+        assert ra["stage"] == "done"
+        assert ra["entities"]["last_dispatch"]["workflow"] == "A"
+        _assert_pure_native_tamil(ra["reply_text"])
+
+        # 3. Emergency 112 in Tamil
+        await b.start_call("ta-emg")
+        re_ = await b.process_turn("ta-emg", "நெடுஞ்சாலையில் விபத்து, இரத்தம் வருது காயம் ஏற்பட்டது")
+        assert re_["language"] == "ta-IN"
+        assert re_["stage"] == "emergency_handoff"
+        _assert_pure_native_tamil(re_["reply_text"])
+
+        # 4. LLM safety validator MUST reject English or Hindi when session is Tamil
+        mem = b.get_or_create_call("ta-flow-b")
+        assert b._llm_reply_is_safe("Sorry, please tell me your policy number.", mem, {"injured": False}) is False
+        assert b._llm_reply_is_safe("Shukar hai aap safe hain, main tow bhej rahi hoon.", mem, {"injured": False}) is False
+        assert b._llm_reply_is_safe(
+            "நல்லவேளை, நீங்கள் பாதுகாப்பாக இருக்கிறீர்கள்! உடனடியாக சாலை உதவி பணியாளர் வருகிறார்.",
+            mem,
+            {"injured": False},
+        ) is True
+
+    asyncio.run(_run())
+
+
+def test_gnani_client_and_api_native_tamil_stt_tts_routing(monkeypatch):
+    gnani_client.set_api_key("dummy-tamil-test-key")
+    captured: Dict[str, Any] = {}
+
+    class _MockResp:
+        def __init__(self, payload: Dict[str, Any]):
+            self.status_code = 200
+            self.headers = {"content-type": "application/json"}
+            self.content = b""
+            self._payload = payload
+            self.text = json.dumps(payload)
+
+        def json(self):
+            return self._payload
+
+    class _MockClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def post(self, url, headers=None, files=None, data=None, json=None):
+            if "/stt/v3" in url:
+                captured["stt_data"] = dict(data or {})
+                return _MockResp({"transcript": "ரேடியேட்டர் உடைஞ்சிடுச்சு", "language": "ta-IN", "request_id": "ta-req"})
+            captured["tts_json"] = dict(json or {})
+            wav = gnani_client.fallback_tts_wav("ok")
+            return _MockResp({"audio": base64.b64encode(wav).decode("ascii")})
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(httpx, "AsyncClient", _MockClient)
+
+    async def _check():
+        stt_auto = await gnani_client.transcribe_wav(gnani_client.fallback_tts_wav("ta"), language_code="indic-auto")
+        assert captured["stt_data"]["model"] == "prisma-v3.0"
+        assert captured["stt_data"]["language_code"] == "indic-auto"
+        assert "ta-IN" in captured["stt_data"]["language_candidates"]
+        assert stt_auto["transcript"] == "ரேடியேட்டர் உடைஞ்சிடுச்சு"
+
+        stt_ta = await gnani_client.transcribe_wav(gnani_client.fallback_tts_wav("ta"), language_code="ta-IN")
+        assert captured["stt_data"]["preferred_language"] == "ta-IN"
+        assert stt_ta["language"] == "ta-IN"
+
+        tts_ta = await gnani_client.synthesize_speech("நல்லவேளை, நீங்கள் பாதுகாப்பாக இருக்கிறீர்கள்.", language="ta-IN", use_cache=False)
+        assert captured["tts_json"]["language"] == "ta-IN"
+        assert tts_ta["language"] == "ta-IN"
+
+    asyncio.run(_check())
+
+    # End-to-end REST + WebSocket in native Tamil (fallback mode)
+    gnani_client.set_api_key("")
+    orig_persist = BRAIN.persist_history
+    BRAIN.persist_history = False
+    try:
+        with TestClient(app) as client:
+            st = client.post("/api/call/start", json={"call_id": "ta-http-01", "language": "ta-IN"}).json()
+            assert st["language"] == "ta-IN"
+            _assert_pure_native_tamil(st["greeting"])
+            assert all(c["language"] == "ta-IN" for c in st["clauses"])
+
+            t1 = client.post(
+                "/api/call/turn",
+                json={"call_id": "ta-http-01", "transcript_override": "ஹைவேல ரேடியேட்டர் உடைஞ்சிடுச்சு, காயமில்லை, பாலிசி 3310"},
+            ).json()
+            assert t1["language"] == "ta-IN"
+            assert t1["entities"]["policy_number"] == "3310"
+            _assert_pure_native_tamil(t1["reply_text"])
+            assert all(c["language"] == "ta-IN" for c in t1["clauses"])
+
+            with client.websocket_connect("/ws/call/ta-ws-01") as ws:
+                assert ws.receive_json()["type"] == "ready"
+                ws.send_json({"type": "end_turn", "transcript_override": "காயமில்லை, சென்னைல பேட்டரி டெட் ஆகிடுச்சு"})
+                msgs = []
+                while True:
+                    m = ws.receive_json()
+                    if m["type"] == "vad_state":
+                        continue
+                    msgs.append(m)
+                    if m["type"] == "turn_complete":
+                        break
+                br = next(m for m in msgs if m["type"] == "brain_result")
+                assert br["language"] == "ta-IN"
+                _assert_pure_native_tamil(br["reply_text"])
+                tc = [m["clause"] for m in msgs if m["type"] == "tts_clause"]
+                assert tc and all(c["language"] == "ta-IN" for c in tc)
+                ws.send_json({"type": "end_call"})
+                ws.receive_json()
+    finally:
+        BRAIN.persist_history = orig_persist
+
+
