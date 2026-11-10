@@ -1,60 +1,59 @@
 # BimaVani (बीमा-वाणी) 🛣️
-### 24×7 Hinglish Voice-First Roadside Assistance + IRDAI Claim Desk — Helpline `1-800-BIMA-VANI`
+### 24×7 Multilingual Voice-First Roadside Assistance + IRDAI Claim Desk — Helpline `1-800-BIMA-VANI`
 
-A production-grade hackathon project proving **one thesis end-to-end**:
+📄 **[Read the 1-Page Project Pitch (`PITCH.md`)](PITCH.md)** · 📊 **[Benchmarks (`EVALUATION.md`)](EVALUATION.md)** · 🚀 **[Run & Submit Guide (`HOW_TO_USE_AND_SUBMIT.md`)](HOW_TO_USE_AND_SUBMIT.md)**
 
-> A voice agent that survives **loud Indian highway noise**, **student-tier API rate
-> limits**, and **mid-sentence barge-in corrections** — while safely dispatching
-> real-world RSA workflows and auto-drafting IRDAI-compliant claim numbers.
+A production-grade voice-AI system proving **one thesis end-to-end**:
+
+> A voice agent that survives **loud Indian highway noise**, **packet jitter/loss**, **student-tier API rate limits**, and **mid-sentence barge-in corrections** across **all 10 Gnani Indian languages** — while safely dispatching real-world RSA workflows and auto-drafting IRDAI-compliant FNOL claims.
 
 Built on the **Gnani.ai Vachana/Artha ecosystem**: **Prisma v3.0/v2.5** STT +
-**Timbre v3.0/v2.5** TTS (per-language voices such as *Nalini*, *Asha*, *Kavya*, *Maya*, *Rani*, *Rekha*), with a **deterministic Hinglish & 10-language
-tool-brain + optional OpenAI-compatible LLM adapter** — it works with *only*
-`GNANI_API_KEY`.
+**Timbre v3.0/v2.5** TTS (per-language voices such as *Nalini*, *Asmita*, *Ananya*, *Asha*, *Kavya*, *Maya*, *Rani*, *Rekha*), with a **deterministic 10-language tool-brain + DPDP PII redaction + optional OpenAI-compatible LLM adapter (`gnani/gnani-evon-v3.3-30B-A3B`)** — runs completely with *only* `GNANI_API_KEY`.
 
 ---
 
-## Hybrid Streaming-Turn Voice Architecture (8 Stages)
+## Streaming 8-Stage Voice Telephony Architecture
 
 ```
-+--------------------------------------------------------------------------------------+
-|     TURN-TAKING STATE MACHINE & BARGE-IN CONTROLLER (Stop & Flush All <50ms)          |
-+---+------------------+------------------+------------------+------------------+------+
-    |                  |                  |                  |                  |
-    v                  v                  v                  v                  v
-[1. Microphone] --> [2. Gnani Prisma] --> [3. Endpointing] --> [4. Brain: Tools + Memory]
- 16kHz Mono PCM      POST /stt/v3         Push-to-Talk          (Injury/RSA/Claim
- WAV + Noise Mix     Hinglish ASR         (Auto-VAD 650ms        Tools + Memory)
-                                          600ms silence)          |
-    ^                                                             |
-    | (Next Turn / Barge-In)                                      v
-[8. Speaker]   <-- [7. Jitter Buffer] <-- [6. Gnani Timbre] <-- [5. 2-Clause Buffer]
- Agent Voice      120ms prebuffer +        24kHz PCM WAV           Ack Clause 1 first
-                  gapless Web Audio        Nalini + MD5 cache      + Details Clause 2
-                  Queue + Instant Stop     (+44-byte RIFF wrap)
++---------------------------------------------------------------------------------------------------+
+|        TURN-TAKING STATE MACHINE & BARGE-IN CONTROLLER (Browser <20ms stop · Backend <50ms flush) |
++---+-----------------------+--------------------+---------------------+--------------------+-------+
+    |                       |                    |                     |                    |
+    v                       v                    v                     v                    v
+[1. Microphone] --------> [2. Gnani Prisma] -> [3. Endpointing] ----> [4. Brain + DPDP PII Redactor]
+ 20ms PCM frames          POST /stt/v3          80Hz High-Pass DSP +   10-Lang Injury/RSA/IRDAI
+ + AudioWorklet Noise     10-Lang + indic-auto  Adaptive Noise Floor   Tools + [interrupted] Context
+ + InputJitterBuffer                            Auto-VAD 600ms (def.)  + Rolling p50/p95 SLOs
+ (Min-Heap + PLC)                               or Push-to-Talk             |
+    ^                                                                       |
+    | (Next Turn / Server-VAD Barge-In)                                     v
+[8. Speaker]   <-------- [7. Output Jitter] <-- [6. Gnani Timbre] <--- [5. 2-Clause Buffer]
+ Web Audio Queue          >=120ms Prebuffer      Async Producer/Cons.   Empathy Hook Clause 1 first
+ + Instant Stop           Gate + Gapless Queue   + MD5 Disk Cache       + Action Details Clause 2
 ```
 
-| Stage | Component | File | Tech |
+| Stage | Component | File | Engineering Details |
 |---|---|---|---|
-| 1 | 16kHz Mono 16-bit PCM WAV Recorder + **Indian Highway Noise Mixer** | `frontend/app.js` | Web Audio API, AudioWorklet |
-| 2 | **Gnani Prisma** STT (`prisma-v2.5`/`v3.0`, codemix Hinglish) | `backend/gnani_client.py` | `POST https://api.vachana.ai/stt/v3` |
-| 3 | Auto-VAD live (raw-mic analyser, 650ms silence endpoint) / Push-to-Talk hold optional | `backend/pipeline/endpointing.py` | 20ms frame energy gate |
-| 4 | Deterministic Brain + tools + short/long memory | `backend/pipeline/brain.py` | pure Python, optional LLM adapter |
-| 5 | 2-Clause Smart Buffer (≤2 TTS calls/reply) | `backend/pipeline/clause_buffer.py` | hook-first splitter |
-| 6 | **Gnani Timbre** TTS (voice Nalini, `timbre-v2.5` — **never v2.0**, retired) | `backend/gnani_client.py` | `POST /api/v1/tts/inference`, 24kHz PCM → 44-byte RIFF WAV + MD5 cache |
-| 7 | Browser Jitter Buffer (120ms prebuffer + gapless scheduling) | `frontend/app.js` | Web Audio `BufferSource` queue |
-| 8 | Barge-In Controller (<20ms browser stop / <50ms full flush) | `backend/pipeline/barge_in.py` + `app.js` | asyncio task cancel + queue flush |
+| 1 | 20 ms 16 kHz PCM Streamer + Highway Noise Mixer + `InputJitterBuffer` | `frontend/app.js`, `backend/pipeline/jitter_buffer.py` | Web Audio `AudioWorklet`, min-heap packet reordering, **adaptive jitter target (40–120 ms)**, **Packet Loss Concealment (PLC)**, 300 ms pre-roll |
+| 2 | **Gnani Prisma** STT (`prisma-v3.0`/`v2.5`, `codemix` & `indic-auto`) | `backend/gnani_client.py` | `POST /stt/v3`, `asyncio.Semaphore(1)`, `429/5xx` backoff retries, **80 Hz RC high-pass diesel-rumble DSP** before STT |
+| 3 | **Auto-VAD** (default, 600 ms hysteresis) / Push-to-Talk (optional) | `backend/pipeline/endpointing.py` | Minimum-statistics **adaptive noise-floor estimator**, **SNR telemetry**, <220 ms horn-spike rejection |
+| 4 | Deterministic Brain + DPDP PII Redactor + Rolling SLOs | `backend/pipeline/brain.py`, `safety.py`, `queues.py` | Pure-Python 10-language rules + optional LLM (`gnani-evon-v3.3-30B-A3B`), Aadhaar/PAN/mobile masking before storage, `LatencyTracker` **p50/p95** |
+| 5 | 2-Clause Smart Buffer (≤2 TTS calls/turn) | `backend/pipeline/clause_buffer.py` | Protects acronyms (`I.R.D.A.I.`, `N.H.44`), puts safety/empathy hook first |
+| 6 | **Gnani Timbre** TTS (`timbre-v3.0`/`v2.5` — never retired `v2.0`) | `backend/gnani_client.py`, `backend/main.py` | **True async producer/consumer streaming** across bounded `tts` queue, 24 kHz WAV framing, MD5 disk cache |
+| 7 | `OutputJitterBuffer` + Browser Web Audio Queue | `backend/pipeline/jitter_buffer.py`, `frontend/app.js` | **≥120 ms strict prebuffer gate** (`drain_ready`) + back-to-back gapless WebAudio playout |
+| 8 | Barge-In Controller (<20 ms client / <50 ms server flush) | `backend/pipeline/barge_in.py`, `main.py` | Cancels active producer/consumer tasks, flushes 7 queues + jitter buffers, injects `[interrupted]` context |
 
-### The 6 Mandatory Engineering Guardrails (all implemented & tested)
+### Verified Engineering Guardrails (`tests/test_bimavani.py` — 46/46 passing)
 
-| # | Guardrail | Where | Proof |
+| # | Guardrail & Engineering Upgrade | Where | Proof Test |
 |---|---|---|---|
-| G1 | Auto-VAD default (VAD on RAW mic, noise-mixer only affects the sent WAV; 650ms silence endpoint) + Push-to-Talk hold fallback | `endpointing.py`, `app.js` | `test_vad_ignores_horn_then_endpoint_silence` |
-| G2 | `asyncio.Semaphore(1)` around ALL live Gnani calls + 429/5xx exponential-backoff retry | `gnani_client.py` | `test_semaphore_is_one`, `test_rate_limit_retry_guard` |
-| G3 | Bounded `asyncio.Queue(maxsize=32)` with depth/backpressure telemetry | `queues.py` (+ live on the UI 8-box bar) | `test_bounded_queue_backpressure_count` (20 pushes → depth 8, 12 drops) |
-| G4 | 2-Clause Smart Chunk Buffer (≤2 TTS calls; Clause-1 empathy hook first) | `clause_buffer.py` | `test_clause_buffer_max_two_and_hook_first` |
-| G5 | Browser jitter buffer: 120ms prebuffer + gapless Clause-2 scheduling | `app.js` | `playClausesGapped()` back-to-back `src.start(t)` |
-| G6 | Sub-50ms barge-in: browser audio kill <20ms → backend task cancel + queue flush → cards update | `barge_in.py`, `app.js`, `main.py` | `test_barge_in_flush_under_50ms` |
+| G1 | **Auto-VAD default** (600 ms hysteresis + 80 Hz HPF + adaptive noise floor) + Push-to-Talk toggle | `endpointing.py`, `app.js` | `test_vad_ignores_short_horn_burst_and_endpoints_after_silence`, `test_80hz_highpass_dsp_and_adaptive_noise_floor_vad` |
+| G2 | `asyncio.Semaphore(1)` per event loop around all live Gnani calls + `429/5xx` retry & `401` fail-fast | `gnani_client.py` | `test_semaphore_is_one_and_reentrant_across_loops`, `test_rate_limit_retry_guard_and_fail_fast_401` |
+| G3 | Bounded `asyncio.Queue(maxsize=32)` hops + `SessionRegistry` isolation + rolling `p50/p95` `LatencyTracker` | `queues.py` | `test_bounded_queue_backpressure_drop_oldest_vs_newest`, `test_rolling_slo_telemetry_and_multilingual_eval_matrix` |
+| G4 | 2-Clause Smart Buffer (≤2 clauses/turn, Clause-1 empathy hook first) | `clause_buffer.py` | `test_clause_buffer_max_two_and_hook_first`, `test_clause_buffer_preserves_irdai_acronym_and_no_empty_clause` |
+| G5 | Spec-compliant RIFF WAV headers (`len(pcm)//2`), **PLC**, adaptive jitter, and **≥120 ms `OutputJitterBuffer` gate** | `jitter_buffer.py`, `app.js` | `test_input_and_output_jitter_buffers_and_vad_reordering`, `test_wav_header_riff_sample_count_fix_plc_and_output_prebuffer` |
+| G6 | Sub-50 ms backend barge-in flush (`<20 ms` browser kill) + `[interrupted]` context dump | `barge_in.py`, `brain.py`, `main.py` | `test_state_machine_transitions_and_barge_in_flush_under_50ms`, `test_interrupted_context_dump_and_llm_prompt_visibility` |
+| G7 | **DPDP PII Redactor** (masks Aadhaar/PAN/mobile/email before persistence & LLM serialization; keeps 4-digit policies) | `safety.py`, `brain.py` | `test_dpdp_pii_redaction_and_safe_history_persistence` |
 
 ---
 
@@ -62,56 +61,61 @@ tool-brain + optional OpenAI-compatible LLM adapter** — it works with *only*
 
 | Feature | Contract |
 |---|---|
-| Keys | from **app.gnani.ai/voice** (5,000 programme credits) → env `GNANI_API_KEY`, header `X-API-Key-ID` |
-| STT | `POST {GNANI_BASE_URL:-https://api.vachana.ai}/stt/v3` · multipart `audio_file=("call_turn.wav", …, "audio/wav")` + `model, language_code, format, preferred_language, keyterms` |
-| TTS | `POST /api/v1/tts/inference` · JSON `{text, voice:"Nalini", model:"timbre-v2.5", language:"hi-IN", speed:1.0, audio_config:{sample_rate:24000, encoding:"linear_pcm", container:"wav"}}` |
-| SDK | optional `gnani-vachana` package (`gnani.stt.GnaniSTTClient`, `gnani.tts.GnaniTTSClient`) — REST is primary |
-| Cache | `hashlib.md5(text|voice|model|lang).wav` under `backend/cache/tts/` → demo re-runs cost **0 credits** |
-| No key? | **Credit-Shield Fallback Mode** — deterministic transcript path + locally-synthesized spoken-tone WAV. The demo never crashes. |
+| Keys | `app.gnani.ai/voice` → env `GNANI_API_KEY`, header `X-API-Key-ID` (or hot-loaded in UI **🔑 Gnani API** modal) |
+| STT | `POST {GNANI_BASE_URL:-https://api.vachana.ai}/stt/v3` · `prisma-v3.0` (`indic-auto` / explicit language / `codemix`) |
+| TTS | `POST /api/v1/tts/inference` · `timbre-v3.0` (per-language native voices, 24 kHz linear PCM WAV) |
+| Cache | `hashlib.md5("tts-v2|mode|text|voice|model|lang").wav` under `backend/cache/tts/` → demo re-runs cost **0 credits** |
+| Fallback | **Credit-Shield Fallback Mode** when `GNANI_API_KEY` is unset — full pipeline + deterministic spoken-tone WAV |
 
-**Models:** STT `prisma-v3.0` (default) / `prisma-v2.5` · TTS `timbre-v3.0` (default) / `timbre-v2.5`.
-**Never** `timbre-v2.0` (retired). Languages: `indic-auto` (default auto-detect) + all 10 Gnani languages (`hi-IN`, `en-IN`, `mr-IN`, `ta-IN`, `te-IN`, `kn-IN`, `ml-IN`, `bn-IN`, `gu-IN`, `pa-IN`).
+**Supported Languages (all 10 Gnani languages + auto-detect):** `indic-auto`, `hi-IN`, `en-IN`, `mr-IN`, `ta-IN`, `te-IN`, `kn-IN`, `ml-IN`, `bn-IN`, `gu-IN`, `pa-IN`.
 
 ---
 
-## Domain Tools (synthetic, DPDP-compliant — 100% fake data)
+## Domain Workflows & Synthetic Data (100% DPDP-Safe)
 
-1. **triage_injury_and_safety** — injury keywords → halts claim intake, raises 🚨 112 + 🛣️ 1033 NHAI Patrol + live human officer handoff.
-2. **dispatch_smart_rsa(road_type, parts, is_drivable, policy)** — 3 real workflows:
-   - **A · Minor breakdown** (puncture/battery/keys/fuel): on-spot bike mechanic, ETA 22 min, **protects the 20% No-Claim Bonus** (agent literally says: file no claim!).
-   - **B · Non-drivable** (radiator/coolant/axle/smoke/EV stuck): 🔴 *do NOT start engine*, 1033 cones on NH, **free flatbed tow ≤50 km** to the nearest cashless garage; remote rural ETA>2h → **IRDAI ₹1,500 local towing reimbursement** authorization.
-   - **C · Drivable minor** (bumper/headlight/mirror): 4 photos with plate → self-drive to cashless garage.
-3. **calculate_irdai_claim_draft(policy, parts)** — compulsory deductible ₹100 (2W) / ₹1,000 (4W), depreciation, estimated ₹ range labeled *"Estimated Range Subject to Surveyor Inspection — Not Final Approval"*.
+1. **`triage_injury_and_safety`** — injury keywords across all 10 scripts → halts claim intake, raises 🚨 **112 Ambulance + Police** + 🛣️ **1033 NHAI Patrol** (on highways) + human emergency officer handoff.
+2. **`dispatch_smart_rsa`** — 3 deterministic workflows:
+   - **A · NCB Saver (minor breakdown):** puncture/battery/keys/fuel → on-spot bike mechanic (~22 min ETA), **explicitly protects 20% No-Claim Bonus (no claim filed)**.
+   - **B · Non-Drivable Crash/Fault:** radiator/coolant/axle/smoke/EV → *"do NOT start engine"*, **free flatbed tow ≤50 km**, plus **IRDAI ₹1,500 rural local towing reimbursement** when remote ETA > 2 h.
+   - **C · Drivable Body Damage:** bumper/headlight/mirror → 4 number-plate damage photos + self-drive to cashless garage.
+3. **`calculate_irdai_claim_draft`** — compulsory deductible ₹100 (2W) / ₹1,000 (4W), age-scaled depreciation (0% on Zero-Dep), labeled *"Estimated Range Subject to Surveyor Inspection — Not Final Approval"*.
 
-Multi-turn loop: **Turn 1** incident → RSA ticket + FNOL card + spoken read-back → **Turn 2**
-
-**Policies (all synthetic):** `7820` Maruti Swift Zero-Dep · `4491` Honda Activa Zero-Dep · `1055` Hero Splendor+ Zero-Dep · `9932` Mahindra Bolero Standard · `3310` Tata Nexon EV Zero-Dep.
+**Seeded Synthetic Policies (`backend/data/synthetic_db.json`):** `7820` Maruti Swift Zero-Dep · `4491` Honda Activa Zero-Dep · `1055` Hero Splendor+ Zero-Dep · `9932` Mahindra Bolero Standard · `3310` Tata Nexon EV Zero-Dep (plus dynamic lookup for any spoken 4-digit policy number).
 
 ---
 
-## Run It
+## Run & Test
 
 ```bash
-# macOS / Linux (also applies --test for pytest, --verify for live Gnani smoke)
-./run.sh
-# Windows
-run.bat
+# Run web UI + FastAPI + WebSocket server (http://127.0.0.1:8000)
+./run.sh            # Windows: run.bat
 
-# 1-command live Gnani verification (after putting GNANI_API_KEY in .env)
+# Run full automated test suite (46 tests)
+.venv/bin/pytest -v
+
+# Run 20-case acoustic/barge-in + 30-case 10-language + engineering layer benchmark
+.venv/bin/python backend/eval_runner.py
+
+# Verify live Gnani Timbre ⇄ Prisma round-trip (requires GNANI_API_KEY in .env)
 python verify_gnani_api.py
 ```
 
-Open http://127.0.0.1:8000 — or set the key live from the UI (**🔑 Gnani API**, hot-reloads without restart) and press **🧪 Test Live Timbre ⇄ Prisma Round-Trip**.
-
-## Layout
+## Repository Layout
 ```
-backend/main.py · gnani_client.py · rsa_and_claim_rules.py · eval_runner.py
-backend/pipeline/{queues,endpointing,clause_buffer,barge_in,brain}.py
-backend/data/synthetic_db.json (+call_history.json) · backend/cache/tts/
-frontend/{index.html,style.css,app.js} · tests/test_bimavani.py
-plan.txt (single source of truth) · EVALUATION.md · HOW_TO_USE_AND_SUBMIT.md
+PITCH.md                        # 1-page project pitch (Field 5)
+EVALUATION.md                   # Benchmark report & acoustic/multilingual results
+HOW_TO_USE_AND_SUBMIT.md        # Setup, live API verification, 2-3 min demo script & submission guide
+.github/workflows/ci.yml        # Automated CI running pytest (46/46) & eval_runner
+backend/main.py                 # FastAPI REST + WebSocket streaming orchestrator
+backend/gnani_client.py         # Gnani Prisma v3.0 & Timbre v3.0 client (Semaphore(1), cache, resampler)
+backend/rsa_and_claim_rules.py  # Triage, RSA workflows, IRDAI FNOL calculator
+backend/i18n.py                 # Native-script templates & metadata for all 10 Gnani languages
+backend/eval_runner.py          # 20-case acoustic + 30-case 10-language + engineering layer evaluator
+backend/pipeline/{queues,endpointing,jitter_buffer,clause_buffer,barge_in,safety,brain}.py
+frontend/{index.html,style.css,app.js,demo_clips.html}
+tests/test_bimavani.py          # 46 automated unit, WebSocket, DSP/PLC/PII, and 10-language tests
 ```
 
 ---
 
-*BimaVani — voice jo bima hai. Built for the voice-AI hackathon · deadline Nov 10.*
+*BimaVani — voice jo bima hai. Built for Gnani's Great Indian AI Internship Challenge 2026.*

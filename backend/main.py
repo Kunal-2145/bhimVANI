@@ -55,8 +55,13 @@ from backend.pipeline.barge_in import (
 )
 from backend.pipeline.brain import Brain, llm_status, llm_warmup
 from backend.pipeline.clause_buffer import split_into_clauses
-from backend.pipeline.endpointing import EndpointingState, analyze_wav_endpoint, endpoint_turn
-from backend.pipeline.queues import BUS, REGISTRY, SessionPipeline
+from backend.pipeline.endpointing import (
+    EndpointingState,
+    analyze_wav_endpoint,
+    denoise_wav_for_stt,
+    endpoint_turn,
+)
+from backend.pipeline.queues import BUS, METRICS, REGISTRY, SessionPipeline
 from backend.translit import detect_script_language
 
 APP_ROOT = Path(__file__).resolve().parent.parent
@@ -104,11 +109,10 @@ def _resolve_stt_lang(explicit: Optional[str], sess: Optional[SessionPipeline]) 
     return None
 
 
-async def _synthesize_one_clause(
+async def _build_clause_payload(
     c: Dict[str, Any],
-    sess: Optional[SessionPipeline] = None,
     language: Optional[str] = None,
-) -> Dict[str, Any]:
+) -> tuple[Dict[str, Any], bytes]:
     t0 = time.perf_counter()
     lang = (
         normalize_lang_code(language)
@@ -118,10 +122,7 @@ async def _synthesize_one_clause(
     synth = await synthesize_speech(c["text"], language=lang, use_cache=True)
     dt = (time.perf_counter() - t0) * 1000.0
     wav = synth["audio"] if is_valid_wav(synth.get("audio", b"")) else fallback_tts_wav(c["text"])
-    if sess is not None:
-        sess.output_jitter.push(c["index"], wav)
-        sess.output_jitter.pop_ready()
-    return {
+    cp = {
         "index": c["index"],
         "priority": c["priority"],
         "text": c["text"],
@@ -131,6 +132,19 @@ async def _synthesize_one_clause(
         "cached": bool(synth.get("cached", False)),
         "fallback": bool(synth.get("fallback", False)),
     }
+    return cp, wav
+
+
+async def _synthesize_one_clause(
+    c: Dict[str, Any],
+    sess: Optional[SessionPipeline] = None,
+    language: Optional[str] = None,
+) -> Dict[str, Any]:
+    cp, wav = await _build_clause_payload(c, language=language)
+    if sess is not None:
+        sess.output_jitter.push(c["index"], wav)
+        sess.output_jitter.drain_ready(force=True)
+    return cp
 
 
 async def _synthesize_clauses(
@@ -138,14 +152,95 @@ async def _synthesize_clauses(
     sess: Optional[SessionPipeline] = None,
     language: Optional[str] = None,
 ) -> tuple[List[Dict[str, Any]], float]:
-    """Synthesize up to 2 clauses through Timbre + fallback guard; return payloads and total TTS ms."""
+    """Synthesize up to 2 clauses through Timbre + OutputJitterBuffer; return payloads & TTS ms."""
     payloads: List[Dict[str, Any]] = []
     tts_total_ms = 0.0
-    for c in clauses:
-        cp = await _synthesize_one_clause(c, sess=sess, language=language)
+    for idx, c in enumerate(clauses):
+        cp, wav = await _build_clause_payload(c, language=language)
         tts_total_ms += float(cp["latency_ms"])
         payloads.append(cp)
+        if sess is not None:
+            sess.output_jitter.push(cp["index"], wav)
+            sess.output_jitter.drain_ready(force=(idx == len(clauses) - 1))
     return payloads, tts_total_ms
+
+
+async def _stream_clauses_pipeline(
+    clauses: List[Dict[str, Any]],
+    sess: SessionPipeline,
+    sm: Any,
+    language: str,
+    send_clause_fn: Any,
+    t_turn_start: float,
+) -> Dict[str, Any]:
+    """True async producer/consumer streaming across hop queues [6] TTS -> [7] OutputJitterBuffer -> [8] WS.
+
+    Clause 1 is pushed to `tts` queue, prebuffer-gated by `OutputJitterBuffer`, and emitted over
+    WebSocket while Clause 2 is still synthesizing. Barge-in cancels both tasks immediately.
+    """
+    payloads_by_idx: Dict[int, Dict[str, Any]] = {}
+    streamed: List[Dict[str, Any]] = []
+    tts_total_ms = 0.0
+    first_audio_ms: Optional[float] = None
+    t_jitter_start: Optional[float] = None
+
+    async def _producer() -> None:
+        nonlocal tts_total_ms
+        try:
+            for c in clauses:
+                cp, wav = await _build_clause_payload(c, language=language)
+                tts_total_ms += float(cp["latency_ms"])
+                payloads_by_idx[int(cp["index"])] = cp
+                await sess.bus.hops["tts"].put((cp, wav))
+        finally:
+            await sess.bus.hops["tts"].put(None)
+
+    async def _consumer() -> None:
+        nonlocal first_audio_ms, t_jitter_start
+        while True:
+            item = await sess.bus.hops["tts"].get()
+            if item is None:
+                for ch in sess.output_jitter.drain_ready(force=True):
+                    sess.bus.hops["jitter_buffer"].get_nowait()
+                    cp = payloads_by_idx.get(ch.clause_index)
+                    if cp is not None:
+                        if first_audio_ms is None:
+                            first_audio_ms = (time.perf_counter() - t_turn_start) * 1000.0
+                        streamed.append(cp)
+                        await send_clause_fn(cp)
+                break
+            cp, wav = item
+            if t_jitter_start is None:
+                t_jitter_start = time.perf_counter()
+            sess.output_jitter.push(int(cp["index"]), wav)
+            await sess.bus.hops["jitter_buffer"].put(cp["index"])
+            for ch in sess.output_jitter.drain_ready(force=False):
+                sess.bus.hops["jitter_buffer"].get_nowait()
+                ready_cp = payloads_by_idx.get(ch.clause_index)
+                if ready_cp is not None:
+                    if first_audio_ms is None:
+                        first_audio_ms = (time.perf_counter() - t_turn_start) * 1000.0
+                    streamed.append(ready_cp)
+                    await send_clause_fn(ready_cp)
+
+    prod_task = asyncio.create_task(_producer())
+    cons_task = asyncio.create_task(_consumer())
+    sm.register_task(prod_task)
+    sm.register_task(cons_task)
+    try:
+        await asyncio.gather(prod_task, cons_task)
+    finally:
+        for t in (prod_task, cons_task):
+            if not t.done():
+                t.cancel()
+
+    jitter_ms = round(((time.perf_counter() - t_jitter_start) * 1000.0), 2) if t_jitter_start else 0.2
+    return {
+        "clauses": streamed,
+        "tts_total_ms": round(tts_total_ms, 1),
+        "jitter_ms": jitter_ms,
+        "ttfa_ms": round(first_audio_ms, 1) if first_audio_ms is not None else None,
+    }
 
 
 @asynccontextmanager
@@ -230,6 +325,8 @@ async def health() -> Dict[str, Any]:
         "queues": latest.bus.snapshot() if latest else BUS.snapshot(),
         "stages": _stages_snapshot(latest),
         "stage_names": _stage_names(),
+        "slo": METRICS.snapshot(),
+        "dsp_filter": "highpass_80hz",
         "brain": llm_status(),
     }
 
@@ -407,7 +504,7 @@ async def _run_turn_core(
     sess.bus.hops["mic_ingest"].get_nowait()
     await sess.bus.hops["endpointing"].put(1)
 
-    # [2] Prisma STT (or scripted override -> 0 ms / 0 credits)
+    # [2] Prisma STT with 80Hz diesel-rumble DSP filter (or scripted override -> 0 ms / 0 credits)
     stt_lang = _resolve_stt_lang(stt_language or language, sess)
     if transcript_override:
         transcript = transcript_override.strip()
@@ -419,7 +516,9 @@ async def _run_turn_core(
             "skip_reason": "scripted_demo_transcript (0 credits)",
         }
     elif wav_bytes and len(wav_bytes) > 44:
-        stt_meta = await transcribe_wav(wav_bytes, language_code=stt_lang)
+        clean_wav, dsp_meta = denoise_wav_for_stt(wav_bytes)
+        ep["dsp"] = dsp_meta
+        stt_meta = await transcribe_wav(clean_wav, language_code=stt_lang)
     else:
         stt_meta = {"transcript": "", "request_id": "empty", "stt_latency_ms": 0.0, "fallback": True}
     _sync_global_stage("stage_2", float(stt_meta.get("stt_latency_ms") or 0.0), sess)
@@ -435,7 +534,8 @@ async def _run_turn_core(
     sm.transition("THINKING")
     t4 = time.perf_counter()
     result = await BRAIN.process_turn(call_id, transcript, stt_meta, language=language or None)
-    _sync_global_stage("stage_4", (time.perf_counter() - t4) * 1000.0, sess)
+    brain_ms = (time.perf_counter() - t4) * 1000.0
+    _sync_global_stage("stage_4", brain_ms, sess)
     reply_lang = result.get("language") or "hi-IN"
     sess.language = reply_lang
     sess.active_agent_reply = result.get("reply_text", "")
@@ -465,6 +565,24 @@ async def _run_turn_core(
 
     sm.transition("SPEAKING")
 
+    total_turn_ms = round((time.perf_counter() - t_stage1) * 1000, 1)
+    cache_hits = sum(1 for cp in clauses_payload if cp.get("cached"))
+    cache_misses = len(clauses_payload) - cache_hits
+    any_fallback = bool(stt_meta.get("fallback") or any(cp.get("fallback") for cp in clauses_payload))
+    pii_n = int(result.get("pii_redactions") or 0)
+    for tracker in (METRICS, sess.metrics):
+        tracker.record_turn(
+            ttfa_ms=total_turn_ms,
+            stt_ms=float(stt_meta.get("stt_latency_ms") or 0.0),
+            brain_ms=brain_ms,
+            tts_ms=tts_ms,
+            total_turn_ms=total_turn_ms,
+            cache_hits=cache_hits,
+            cache_misses=cache_misses,
+            fallback=any_fallback,
+            pii_redactions=pii_n,
+        )
+
     clause_meta = [
         {
             "index": cp["index"],
@@ -485,10 +603,11 @@ async def _run_turn_core(
         "queues": sess.bus.snapshot(),
         "input_jitter": sess.input_jitter.snapshot(),
         "output_jitter": sess.output_jitter.snapshot(),
+        "slo": sess.metrics.snapshot(),
     }
     result["clause_audio"] = clause_meta
     result["clauses"] = clauses_payload
-    result["total_turn_ms"] = round((time.perf_counter() - t_stage1) * 1000, 1)
+    result["total_turn_ms"] = total_turn_ms
     result["barge_in_hint"] = "Press Interrupt during read-back to correct policy fields."
     return result
 
@@ -618,6 +737,8 @@ async def _handle_barge_in_core(
     sm.resume_listening()
     flush_ms = round((time.perf_counter() - t0) * 1000, 1)
     _sync_global_stage("stage_8", flush_ms, sess)
+    METRICS.record_barge_in(flush_ms)
+    sess.metrics.record_barge_in(flush_ms)
 
     # Snapshot any mic audio captured during/before interruption
     dump_snap = sess.input_jitter.dump_interruption_snapshot()
@@ -637,7 +758,8 @@ async def _handle_barge_in_core(
         audio_stats["peak_dbfs"] = ep_info.get("peak_dbfs", audio_stats["peak_dbfs"])
         audio_stats["duration_ms"] = round(ep_info.get("frames", 0) * 20.0, 1)
         if not transcript:
-            stt = await transcribe_wav(wav_bytes, language_code=stt_lang)
+            clean_wav, _ = denoise_wav_for_stt(wav_bytes)
+            stt = await transcribe_wav(clean_wav, language_code=stt_lang)
             if stt.get("transcript"):
                 transcript = stt["transcript"].strip()
 
@@ -755,7 +877,7 @@ async def ws_call(websocket: WebSocket, call_id: str) -> None:
             sess.bus.hops["mic_ingest"].get_nowait()
             await sess.bus.hops["endpointing"].put(1)
 
-            # [2] STT
+            # [2] STT (with 80Hz diesel-rumble DSP high-pass filter)
             stt_lang = _resolve_stt_lang(stt_language or language, sess)
             if transcript_override:
                 transcript = transcript_override.strip()
@@ -766,7 +888,9 @@ async def ws_call(websocket: WebSocket, call_id: str) -> None:
                     "fallback": False,
                 }
             elif wav_bytes and len(wav_bytes) > 44:
-                stt_meta = await transcribe_wav(wav_bytes, language_code=stt_lang)
+                clean_wav, dsp_meta = denoise_wav_for_stt(wav_bytes)
+                ep["dsp"] = dsp_meta
+                stt_meta = await transcribe_wav(clean_wav, language_code=stt_lang)
             else:
                 stt_meta = {"transcript": "", "request_id": "empty", "stt_latency_ms": 0.0, "fallback": True}
 
@@ -796,7 +920,8 @@ async def ws_call(websocket: WebSocket, call_id: str) -> None:
             sm.transition("THINKING")
             t4 = time.perf_counter()
             result = await BRAIN.process_turn(call_id, transcript, stt_meta, language=language or None)
-            _sync_global_stage("stage_4", (time.perf_counter() - t4) * 1000.0, sess)
+            brain_ms = (time.perf_counter() - t4) * 1000.0
+            _sync_global_stage("stage_4", brain_ms, sess)
             reply_lang = result.get("language") or "hi-IN"
             sess.language = reply_lang
             sess.active_agent_reply = result.get("reply_text", "")
@@ -826,28 +951,50 @@ async def ws_call(websocket: WebSocket, call_id: str) -> None:
                 "clauses_meta": clauses_list,
             })
 
-            # [6] -> [7] -> [8] Stream Clause 1 immediately before Clause 2 finishes!
+            # [6] -> [7] -> [8] Async producer/consumer clause streaming with OutputJitterBuffer gating
             sm.transition("SPEAKING")
             sess.bus.hops["clause_buffer"].get_nowait()
-            tts_total_ms = 0.0
-            streamed_clauses: List[Dict[str, Any]] = []
-            for c in clauses_list:
-                cp = await _synthesize_one_clause(c, sess=sess, language=reply_lang)
-                tts_total_ms += float(cp["latency_ms"])
-                streamed_clauses.append(cp)
-                await sess.bus.hops["tts"].put(len(cp["audio_base64"]))
-                sess.bus.hops["tts"].get_nowait()
-                await sess.bus.hops["jitter_buffer"].put(cp["index"])
-                sess.bus.hops["jitter_buffer"].get_nowait()
+
+            async def _ws_emit_clause(cp: Dict[str, Any]) -> None:
                 await send_evt({"type": "tts_clause", "call_id": call_id, "clause": cp})
 
+            stream_res = await _stream_clauses_pipeline(
+                clauses_list,
+                sess=sess,
+                sm=sm,
+                language=reply_lang,
+                send_clause_fn=_ws_emit_clause,
+                t_turn_start=t_start,
+            )
+            tts_total_ms = float(stream_res["tts_total_ms"])
+            streamed_clauses = stream_res["clauses"]
+            total_turn_ms = round((time.perf_counter() - t_start) * 1000, 1)
+
             _sync_global_stage("stage_6", tts_total_ms, sess)
-            _sync_global_stage("stage_7", 0.5, sess)
+            _sync_global_stage("stage_7", float(stream_res["jitter_ms"]), sess)
+            cache_hits = sum(1 for cp in streamed_clauses if cp.get("cached"))
+            cache_misses = len(streamed_clauses) - cache_hits
+            any_fallback = bool(stt_meta.get("fallback") or any(cp.get("fallback") for cp in streamed_clauses))
+            pii_n = int(result.get("pii_redactions") or 0)
+            for tracker in (METRICS, sess.metrics):
+                tracker.record_turn(
+                    ttfa_ms=stream_res.get("ttfa_ms") or total_turn_ms,
+                    stt_ms=float(stt_meta.get("stt_latency_ms") or 0.0),
+                    brain_ms=brain_ms,
+                    tts_ms=tts_total_ms,
+                    total_turn_ms=total_turn_ms,
+                    cache_hits=cache_hits,
+                    cache_misses=cache_misses,
+                    fallback=any_fallback,
+                    pii_redactions=pii_n,
+                )
+
             await send_evt({
                 "type": "turn_complete",
                 "call_id": call_id,
                 "language": reply_lang,
-                "total_turn_ms": round((time.perf_counter() - t_start) * 1000, 1),
+                "ttfa_ms": stream_res.get("ttfa_ms"),
+                "total_turn_ms": total_turn_ms,
                 "pipeline": {
                     "stages_ms": _stages_snapshot(sess),
                     "endpointing": ep,
@@ -855,6 +1002,7 @@ async def ws_call(websocket: WebSocket, call_id: str) -> None:
                     "queues": sess.bus.snapshot(),
                     "input_jitter": sess.input_jitter.snapshot(),
                     "output_jitter": sess.output_jitter.snapshot(),
+                    "slo": sess.metrics.snapshot(),
                 },
             })
         except asyncio.CancelledError:
@@ -945,19 +1093,33 @@ async def ws_call(websocket: WebSocket, call_id: str) -> None:
                         "entities": started["memory"]["entities"],
                     })
                     sm.transition("SPEAKING")
-                    for c in started["clauses"]:
-                        cp = await _synthesize_one_clause(c, sess=sess, language=call_lang)
+                    t_greet = time.perf_counter()
+
+                    async def _ws_emit_greet(cp: Dict[str, Any]) -> None:
                         await send_evt({"type": "tts_clause", "call_id": call_id, "clause": cp})
+
+                    greet_res = await _stream_clauses_pipeline(
+                        started["clauses"],
+                        sess=sess,
+                        sm=sm,
+                        language=call_lang,
+                        send_clause_fn=_ws_emit_greet,
+                        t_turn_start=t_greet,
+                    )
+                    _sync_global_stage("stage_6", float(greet_res["tts_total_ms"]), sess)
+                    _sync_global_stage("stage_7", float(greet_res["jitter_ms"]), sess)
                     await send_evt({
                         "type": "turn_complete",
                         "call_id": call_id,
                         "is_greeting": True,
                         "language": call_lang,
+                        "ttfa_ms": greet_res.get("ttfa_ms"),
                         "pipeline": {
                             "stages_ms": _stages_snapshot(sess),
                             "queues": sess.bus.snapshot(),
                             "input_jitter": sess.input_jitter.snapshot(),
                             "output_jitter": sess.output_jitter.snapshot(),
+                            "slo": sess.metrics.snapshot(),
                         },
                     })
 
@@ -1125,6 +1287,8 @@ async def pipeline_state(call_id: Optional[str] = None) -> Dict[str, Any]:
         "stage_names": _stage_names(),
         "input_jitter": sess.input_jitter.snapshot() if sess else None,
         "output_jitter": sess.output_jitter.snapshot() if sess else None,
+        "slo": sess.metrics.snapshot() if sess else METRICS.snapshot(),
+        "global_slo": METRICS.snapshot(),
         "barge_in": {sid: sm.snapshot() for sid, sm in SESSION_STATE_MACHINES.items()},
     }
 

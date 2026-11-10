@@ -1,5 +1,5 @@
-# How to Use, Judge-Demo & SUBMIT — BimaVani
-*Add your key, verify live, record the 60-second video, submit. Deadline: November 10.*
+# How to Use, Demo & Submit — BimaVani
+*Add your Gnani key, verify live, record your 2–3 minute demo video, and submit. Extended Deadline: November 15, 2026.*
 
 ---
 
@@ -9,11 +9,11 @@
 2. From the project folder:
    ```bash
    cp .env.example .env
-   # edit .env and put your key into:
+   # edit .env and set:
    #   GNANI_API_KEY=<your-key>
    ```
 
-   **OR (no restart ever needed):** start the app first, click **🔑 Set Gnani API Key** in the navbar, paste, Save → the backend hot-reloads it into the running Gnani client (see proof on the pill: 🟢 LIVE GNANI).
+   **OR (no restart needed):** start the app first, click **🔑 Gnani API** in the navbar, paste, and Save → the backend hot-reloads it immediately (`🟢 LIVE GNANI`).
 
 ```env
 GNANI_API_KEY=...                 # required for live Prisma/Timbre
@@ -21,78 +21,91 @@ GNANI_STT_MODEL=prisma-v3.0       # or prisma-v2.5
 GNANI_TTS_MODEL=timbre-v3.0       # or timbre-v2.5 — NEVER timbre-v2.0 (retired)
 ```
 
-No .env? The app still runs in **Credit-Shield Fallback Mode** — every screen works, TTS returns local spoken-tone audio, 0 credits burned.
+No key? The app runs cleanly in **Credit-Shield Fallback Mode** — all workflows, 8-stage telemetry, DSP, jitter buffers, and local WAV synthesis work with 0 credits burned.
 
-## 2. Verify the Live API (1 command)
+---
 
-```bash
-./run.sh --verify          # or: python verify_gnani_api.py
-```
-Expected: synthesized test phrase → fed into Prisma → **live transcript, request_id, round-trip ms**.
-In-app: click **🔑 Gnani API** in the header bar, paste your key, and press **🧪 Test Live Timbre ⇄ Prisma Round-Trip**.
-
-## 3. Run the Full Demo
+## 2. Verify Live API & Tests
 
 ```bash
-./run.sh                   # server on http://127.0.0.1:8000 (or run.bat on Windows)
+./run.sh --verify          # 1-command live Timbre ⇄ Prisma round-trip check
+.venv/bin/pytest -v        # 46/46 unit, WebSocket, DSP, PLC, PII & 10-language tests
+.venv/bin/python backend/eval_runner.py   # 20/20 acoustic + 30/30 10-lang + DSP/PLC/PII checks
 ```
 
-1. Tap **📞 Call** on the driver handset (phones ring, WebSocket `/ws/call/{call_id}` opens, timer starts).
-2. Pick a **🔊 Road noise** preset under **Setup & test scripts** — set **NH-44 highway (-10 dB)**, keep *into mic* + *play aloud* ON.
-3. Click **NH-44 crash** under quick scenarios. Watch the 8-stage pipeline light up; or click **Injury 112** for emergency escalation.
-4. During the spoken read-back, press **⚡ Interrupt** (or click **⚡ "Ruko policy 4491"**) — demonstrates sub-50ms WebSocket barge-in flush and instant ticket/claim update.
-5. Speak directly into your mic (Auto-VAD is default, or toggle **Push-to-talk**) in any of the 10 supported Indian languages (`hi-IN`, `en-IN`, `mr-IN`, `ta-IN`, `te-IN`, `kn-IN`, `ml-IN`, `bn-IN`, `gu-IN`, `pa-IN`) or `indic-auto`.
-6. Click **📊 Benchmark** in the top navbar → **▶ Run 20-Case Suite** for the deterministic evaluation & waterfall.
-7. Optional: open **🎬 Demo Clips** (`/demo_clips.html`) for the scripted clip player.
+In-app: click **🔑 Gnani API** → **🧪 Test Live Timbre ⇄ Prisma Round-Trip**.
 
-## 4. Screen-Record the 60-Second Video
+---
 
-Script lives in Tab 3 and `EVALUATION.md §60s`. The beats:
+## 3. Run the Live Demo
+
+```bash
+./run.sh                   # serves on http://127.0.0.1:8000 (Windows: run.bat)
+```
+
+1. Tap **📞 Call** on the driver handset (WebSocket `/ws/call/{call_id}` opens, timer starts).
+2. Select a **🔊 Road noise** preset (`NH-44 highway -10 dB` or `8kHz GSM`) with *into mic* ON — shows real-time 20 ms WebSocket streaming, 80 Hz high-pass diesel-rumble filtering, and adaptive noise-floor VAD.
+3. Try quick scenarios or speak live in **any of the 10 Gnani languages** (`hi-IN`, `en-IN`, `mr-IN`, `ta-IN`, `te-IN`, `kn-IN`, `ml-IN`, `bn-IN`, `gu-IN`, `pa-IN` or `indic-auto`):
+   - **Workflow B + FNOL (`NH-44 crash`):** *"Haan safe hain, NH-44 par radiator phat gaya, policy 7820"* → dispatches flatbed tow + 1033 cones + drafts `FNOL-<HEX>` (`₹12,300–₹16,000`), then voice-confirm *"Haan confirm kar do"*.
+   - **Workflow A (NCB Saver):** *"Delhi mein battery dead ho gayi, koi chot nahi"* → dispatches on-spot mechanic and **protects 20% No-Claim Bonus (no claim filed)**.
+   - **Workflow B Rural Reimbursement:** Mention a rural/village road + policy `9932` → authorizes **₹1,500 IRDAI local towing reimbursement**.
+   - **Barge-In Correction:** While the agent reads back, speak over or press **⚡ Interrupt** → *"Ruko, policy 4491 hai"* → `<20 ms` browser audio cut, `<50 ms` backend flush, `[interrupted]` context logged, cards update immediately.
+   - **Emergency 112:** Mention injury/bleeding → immediately halts claim intake and escalates **112 Ambulance + Police (+ 1033 NHAI)**.
+4. Open **📊 Benchmark → ▶ Run 20-Case Suite** to show the 20/20 + 30/30 10-language matrix live.
+
+---
+
+## 4. Record the 2–3 Minute Demo Video (Submission Form Field 6)
+
+Recommended structure (**2:15–2:45 total**, 1080p screen recording with audio):
 
 ```text
-0:00 hook: "NH-44 par crash ho gaya… engine se bhaap!" (noisy highway audio)
-0:05 noise is mixed INTO mic — Prisma still reads "radiator… policy 7820"
-0:14 agent: "Shukar hai aap safe hain! … gaadi start mat kijiye." + 1033 + free tow
-0:24 BARGE-IN: "Ruko! policy 4491 hai!" → cards update, flush X ms shown
-0:34 claim math on screen: ₹1,000 deductible, est ₹11,500–14,000, surveyor label
-0:44 stack: deterministic brain, semaphore, MD5 cache, bounded queues
-0:54 CTA "BimaVani — voice jo bima hai." + github link
+0:00–0:20  Hook & Problem: Show BimaVani dark telephony console; explain stranded driver
+           on NH-44 highway with diesel rumble, horns, 8 kHz phone audio & NCB pain point.
+0:20–0:55  Live Call + Highway Noise + Barge-In: Turn on NH-44 noise, tap Call, run
+           NH-44 crash (#7820), show 8-stage pipeline lighting up + FNOL draft. Mid-readback,
+           interrupt with "Ruko policy 4491 hai" -> highlight <50ms flush + card update.
+0:55–1:25  NCB Saver + Emergency 112: Show minor battery/puncture protecting 20% NCB
+           (no claim filed), and head injury escalating 112 + 1033 NHAI immediately.
+1:25–1:55  Multilingual Demo: Switch language / indic-auto and run a regional turn
+           (e.g., Tamil or Marathi) showing native Prisma STT + Timbre TTS response.
+1:55–2:30  Engineering Deep-Dive & Benchmark: Highlight 20ms InputJitterBuffer + PLC,
+           80Hz HPF + adaptive noise floor, async 2-clause streaming, DPDP PII redaction,
+           p50/p95 SLO bar, and run Benchmark (20/20 + 30/30 10-lang, 46/46 pytest).
 ```
 
-**Recording tips:** dark console already looks pro; zoom to the RIGHT panel when the claim cards update; let the flush-latency number be visible for 1s; total ≤ 60s; export 1080p.
+---
 
-## 5. Submit (before November 10)
+## 5. Final Submission Checklist (before November 15, 2026)
 
-Checklist:
-- [ ] `run.sh` + `run.bat` fresh-boot clean (delete `.venv` once and re-run to be sure)
-- [ ] `python verify_gnani_api.py` green in LIVE mode
-- [ ] All pytest checks green: `./run.sh --test` (plus `python backend/eval_runner.py` 20/20)
-- [ ] One video take with barge-in beat included
-- [ ] GitHub repo pushed: code + README.md + EVALUATION.md + this file (no `.env`! `.gitignore` already blocks it)
+- [ ] `.venv/bin/pytest -v` → **46/46 passing**
+- [ ] `.venv/bin/python backend/eval_runner.py` → **20/20 + 30/30 + engineering checks all `true`**
+- [ ] `python verify_gnani_api.py` green with live `GNANI_API_KEY` (no `.env` committed to Git!)
+- [ ] `PITCH.md` (1-page pitch) and `EVALUATION.md` pushed to `main` on GitHub
+- [ ] Record 2–3 min demo video (YouTube Unlisted / Google Drive public-view link for Form Field 6)
+- [ ] Publish LinkedIn & X demo posts with native uploaded video, tagging **@Gnani.ai** / **@GnaniAi** and `#GnaniAI #GreatIndianAIInternshipChallenge`
+- [ ] Submit the official Gnani email form with all fields verified
 
-**LinkedIn post copy (paste + edit):**
+**LinkedIn post copy (attach native 2–3 min demo video):**
 
-> 🚨 1.2 lakh road accidents, and calls into roadside-helplines happen at 8kHz quality from the emergency site. Voice AI that works there must survive: truck horns, Hinglish, a student API key, and angry drivers interrupting mid-sentence.
+> Over 1.2 lakh road crashes happen across India every year — and stranded drivers call helplines in noisy highway or 8 kHz rural conditions, speaking Hinglish or regional languages while stressed.
 >
-> I built **BimaVani (बीमा-वाणी)** — a 24×7 voice-first RSA + IRDAI claim desk. 1-800-BIMA-VANI in one call: injury triage to 112/1033 with human handoff, NCB-saving minor repairs (don't file a claim for a puncture!), free flatbed tow up to 50 km for non-drivable crashes, rural-road ₹1,500 towing reimbursement protocol, and an auto-filled FNOL draft — all confirmed by the driver's OWN voice.
+> I built **BimaVani (बीमा-वाणी)** on **Gnani.ai's Prisma v3.0 & Timbre v3.0** stack — a 24×7 voice-first roadside assistance and IRDAI motor-claim desk across **all 10 Gnani Indian languages**:
+> • Injury-first triage (112 Ambulance + Police + 1033 NHAI) with human handoff
+> • Smart NCB-Saver workflow (puncture/battery → on-spot mechanic, zero claim filed to protect the driver's 20% No-Claim Bonus)
+> • Auto-drafted IRDAI FNOL math + ₹1,500 rural towing reimbursement + voice confirmation
+> • Production telephony engineering: 20 ms WebSocket streaming, InputJitterBuffer with Packet Loss Concealment (PLC), 80 Hz high-pass diesel-rumble DSP, adaptive noise-floor Auto-VAD, async 2-clause Timbre streaming behind a 120 ms OutputJitterBuffer gate, `<50 ms` barge-in flush, DPDP PII redaction, and rolling p50/p95 SLO telemetry.
 >
-> Engineering highlights:
-> — an 8-stage hybrid streaming-turn pipeline, lit up live with per-stage latency
-> — noise-proof push-to-talk by default (truck horns can't fake speech into the VAD)
-> — asyncio.Semaphore(1) + 429-retry so my student-tier Gnani key never trips
-> — max 2 TTS clauses per turn + MD5 disk cache = credit shield
-> — barge-in: browser audio stops <20ms, backend flushes queues & updates cards <50ms
-> — 100% deterministic Hinglish tool-brain: zero LLM, zero hallucination, works with only a Gnani key
->
-> Stack: Gnani Prisma STT + Timbre TTS (voice Nalini) · FastAPI · Web Audio API. Repo + latency waterfall in the comments. 🛣️
+> Verified: 46/46 automated tests, 20/20 acoustic benchmark, and 30/30 across all 10 Gnani languages.
+> Tagging **@Gnani.ai** `#GnaniAI #GreatIndianAIInternshipChallenge` — GitHub repo in the comments! 🛣️
 
-*(Optional: attach the video — LinkedIn prefers uploaded native video.)*
+---
 
 ## 6. Troubleshooting
 
 | Symptom | Fix |
 |---|---|
-| Pill shows "🛡 FALLBACK" | No key loaded → 🔑 modal or `.env` + restart |
-| `HTTP 429` in server logs | Semaphore(1) + auto-retry is engaged; reduce simultaneous tabs |
-| Browser mic blocked | Allow mic on `127.0.0.1`; use Spacebar PTT alternative |
-| 8-box bar stuck | hit `/api/health` — stage telemetry resets each turn |
+| Pill shows `🛡 FALLBACK` | Set `GNANI_API_KEY` via **🔑 Gnani API** modal or `.env` |
+| `HTTP 429` in server logs | `asyncio.Semaphore(1)` + exponential backoff handles it automatically; avoid multiple concurrent tabs |
+| Browser mic blocked | Allow mic permissions on `localhost` / `127.0.0.1`, or toggle **Push-to-talk** / scripted chips |
+| Need quick inspection | Hit `/api/health` and `/api/pipeline-state` for live p50/p95 SLOs, SNR, PLC, and queue depths |

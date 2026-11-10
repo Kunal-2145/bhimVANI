@@ -1,26 +1,27 @@
 """
-BimaVani — Input & Output Jitter Buffers (20ms Ingest + 120ms Playout)
-=======================================================================
+BimaVani — Input & Output Jitter Buffers (20ms Ingest + PLC + 120ms Playout)
+=============================================================================
 Two jitter buffers mirror real-time streaming telephony:
 
 1. InputJitterBuffer (Mic [1] -> Auto-VAD / ASR [2/3]):
-   Network packet jitter and OS audio-callback hiccups make 20ms mic
-   packets arrive unevenly. Auto-VAD needs steady, in-order 20ms frames
-   (320 samples @ 16kHz = 640 bytes) plus a 300ms pre-roll ring so the
-   first syllable of speech or a mid-sentence barge-in is never clipped.
-   On barge-in, `dump_captured_wav()` immediately snapshots the pre-roll
-   + detected mic audio so it can be logged in model context as [interrupted].
+   * Reorders out-of-order 20ms 16kHz mono PCM packets via min-heap
+   * Adaptive jitter target (40–120ms) driven by EWMA arrival jitter
+   * Packet Loss Concealment (PLC): synthesizes attenuated fade frames
+     across 1–3 lost packets instead of leaving holes in STT/VAD audio
+   * 300ms pre-roll ring so the first syllable / barge-in is never clipped
+   * Spec-accurate 44-byte RIFF/WAVE headers (`len(pcm) // 2` samples)
 
 2. OutputJitterBuffer (Timbre TTS [6] -> Playout [7] -> Speaker [8]):
-   Prebuffers >= 120ms of synthesized audio clauses/frames before playout
-   so synthesis/network bursts play gaplessly, and flushes in <1ms on
-   barge-in.
+   * Enforces >= 120ms prebuffer gating (`drain_ready(force=...)`) before
+     releasing clauses to Speaker [8], and flushes in <1ms on barge-in.
 """
 from __future__ import annotations
 
 import heapq
+import math
 import struct
 import time
+from array import array
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Deque, Dict, List, Optional, Tuple
@@ -45,8 +46,20 @@ class InputFrame:
     pcm: bytes
 
 
+def _attenuate_pcm16(frame: bytes, gain: float) -> bytes:
+    """Apply smooth PLC decay gain to a 16-bit PCM frame."""
+    n = len(frame) // 2
+    if n == 0:
+        return frame
+    samples = array("h")
+    samples.frombytes(frame[:n * 2])
+    for i in range(n):
+        samples[i] = int(samples[i] * gain)
+    return samples.tobytes()
+
+
 class InputJitterBuffer:
-    """Orders & paces 20ms 16kHz mono PCM frames before Auto-VAD & ASR."""
+    """Orders & paces 20ms 16kHz mono PCM frames with adaptive depth & PLC."""
 
     def __init__(
         self,
@@ -60,12 +73,15 @@ class InputJitterBuffer:
         self.sample_rate = sample_rate
         self.frame_ms = frame_ms
         self.target_frames = max(1, target_jitter_ms // max(1, frame_ms))
+        self.min_target_frames = min(self.target_frames, 2)
+        self.max_target_frames = max(self.target_frames, 6)
         self.max_buffer_frames = max_buffer_frames
         self.pre_roll: Deque[bytes] = deque(maxlen=max(1, pre_roll_frames))
         self.speech_frames: List[bytes] = []
         self._heap: List[Tuple[int, float, bytes]] = []
         self._next_seq: Optional[int] = None
         self._in_speech = False
+        self._last_good_frame: Optional[bytes] = None
         self.vad = AutoVADDetector(
             sample_rate=sample_rate,
             vad_silence_ms=vad_silence_ms,
@@ -78,9 +94,20 @@ class InputJitterBuffer:
         self.out_of_order = 0
         self.late_dropped = 0
         self.overflow_dropped = 0
+        self.packets_lost = 0
+        self.plc_frames = 0
         self.last_dbfs = -120.0
         self._last_arrival_ms: Optional[float] = None
         self.jitter_ms_est = 0.0
+
+    @property
+    def adaptive_target_frames(self) -> int:
+        if self.jitter_ms_est > self.frame_ms:
+            est = int(math.ceil(self.jitter_ms_est / max(1, self.frame_ms))) + 1
+            return min(self.max_target_frames, max(self.target_frames, est))
+        if self.frames_emitted >= 20 and self.jitter_ms_est < 8.0 and self.out_of_order == 0:
+            return max(self.min_target_frames, self.target_frames - 1)
+        return self.target_frames
 
     def configure_vad(self, vad_silence_ms: int) -> None:
         self.vad.silence_ms_needed = max(300, min(1500, int(vad_silence_ms)))
@@ -95,7 +122,6 @@ class InputJitterBuffer:
             self.jitter_ms_est = 0.85 * self.jitter_ms_est + 0.15 * delta
         self._last_arrival_ms = now_ms
 
-        # Split larger chunks into exact 20ms frames if needed
         chunk_sz = int(self.sample_rate * self.frame_ms / 1000) * 2
         if len(pcm) > chunk_sz:
             events: List[Dict[str, Any]] = []
@@ -115,7 +141,6 @@ class InputJitterBuffer:
             self.out_of_order += 1
 
         if len(self._heap) >= self.max_buffer_frames:
-            # Drop stalest frame to keep bounded memory & low latency
             heapq.heappop(self._heap)
             self.overflow_dropped += 1
             if self._heap:
@@ -125,17 +150,34 @@ class InputJitterBuffer:
         self.frames_in += 1
         return self._drain_ready()
 
+    def _emit_plc(self, gap: int, frame_len: int) -> List[Dict[str, Any]]:
+        """Synthesize attenuated PLC frames when sequence gaps exceed jitter window."""
+        self.packets_lost += gap
+        conceal_n = min(gap, 3)
+        events: List[Dict[str, Any]] = []
+        base = self._last_good_frame or (b"\x00" * frame_len)
+        for k in range(1, conceal_n + 1):
+            plc_pcm = _attenuate_pcm16(base, 0.65 ** k)
+            self.plc_frames += 1
+            ev = self._process_frame(plc_pcm, is_plc=True)
+            events.append(ev)
+        return events
+
     def _drain_ready(self) -> List[Dict[str, Any]]:
         events: List[Dict[str, Any]] = []
-        # Emit while next expected seq is at head, OR buffer reached jitter window
+        target = self.adaptive_target_frames
         while self._heap:
             head_seq = self._heap[0][0]
             if self._next_seq is not None and head_seq == self._next_seq:
                 _, _, frame = heapq.heappop(self._heap)
+                self._last_good_frame = frame
                 self._next_seq += 1
                 events.append(self._process_frame(frame))
-            elif len(self._heap) >= self.target_frames:
+            elif len(self._heap) >= target:
                 head_seq, _, frame = heapq.heappop(self._heap)
+                if self._next_seq is not None and head_seq > self._next_seq:
+                    events.extend(self._emit_plc(head_seq - self._next_seq, len(frame)))
+                self._last_good_frame = frame
                 self._next_seq = head_seq + 1
                 events.append(self._process_frame(frame))
             else:
@@ -147,17 +189,19 @@ class InputJitterBuffer:
         events: List[Dict[str, Any]] = []
         while self._heap:
             head_seq, _, frame = heapq.heappop(self._heap)
+            if self._next_seq is not None and head_seq > self._next_seq:
+                events.extend(self._emit_plc(head_seq - self._next_seq, len(frame)))
+            self._last_good_frame = frame
             self._next_seq = head_seq + 1
             events.append(self._process_frame(frame))
         return events
 
-    def _process_frame(self, frame: bytes) -> Dict[str, Any]:
+    def _process_frame(self, frame: bytes, is_plc: bool = False) -> Dict[str, Any]:
         self.frames_emitted += 1
         self.last_dbfs = round(frame_rms_dbfs(frame), 1)
         vad_ev = self.vad.feed(frame)
         if vad_ev == "speech":
             self._in_speech = True
-            # Prepend pre-roll so initial syllable is never clipped
             self.speech_frames.extend(self.pre_roll)
             self.speech_frames.append(frame)
         elif self._in_speech:
@@ -170,10 +214,11 @@ class InputJitterBuffer:
             "vad": vad_ev,
             "in_speech": self._in_speech,
             "dbfs": self.last_dbfs,
+            "plc": is_plc,
         }
 
     def take_utterance_wav(self, include_preroll_if_empty: bool = False) -> bytes:
-        """Return 16kHz mono RIFF/WAV of the captured utterance and clear buffer."""
+        """Return spec-compliant 16kHz mono RIFF/WAV (`num_samples = len(pcm)//2`)."""
         self.flush_pending_frames()
         frames = list(self.speech_frames)
         self.speech_frames.clear()
@@ -182,14 +227,15 @@ class InputJitterBuffer:
         pcm = b"".join(frames)
         if not pcm:
             return b""
-        return make_wav_header(len(pcm), sample_rate=self.sample_rate) + pcm
+        return make_wav_header(len(pcm) // 2, sample_rate=self.sample_rate) + pcm
 
     def dump_interruption_snapshot(self) -> Dict[str, Any]:
-        """Snapshot pre-roll + any detected speech frames without losing ongoing stream."""
+        """Snapshot pre-roll + detected speech frames with exact RIFF sample count."""
         frames = list(self.speech_frames) if self.speech_frames else list(self.pre_roll)
         pcm = b"".join(frames)
-        duration_ms = round(1000.0 * (len(pcm) // 2) / max(1, self.sample_rate), 1)
-        wav = (make_wav_header(len(pcm), sample_rate=self.sample_rate) + pcm) if pcm else b""
+        n_samples = len(pcm) // 2
+        duration_ms = round(1000.0 * n_samples / max(1, self.sample_rate), 1)
+        wav = (make_wav_header(n_samples, sample_rate=self.sample_rate) + pcm) if pcm else b""
         return {
             "wav": wav,
             "duration_ms": duration_ms,
@@ -212,6 +258,7 @@ class InputJitterBuffer:
         return {
             "frame_ms": self.frame_ms,
             "target_jitter_ms": self.target_frames * self.frame_ms,
+            "adaptive_target_ms": self.adaptive_target_frames * self.frame_ms,
             "buffered_frames": len(self._heap),
             "buffered_ms": len(self._heap) * self.frame_ms,
             "pre_roll_frames": len(self.pre_roll),
@@ -222,8 +269,11 @@ class InputJitterBuffer:
             "out_of_order": self.out_of_order,
             "late_dropped": self.late_dropped,
             "overflow_dropped": self.overflow_dropped,
+            "packets_lost": self.packets_lost,
+            "plc_frames": self.plc_frames,
             "jitter_ms_est": round(self.jitter_ms_est, 1),
             "last_dbfs": self.last_dbfs,
+            "vad": self.vad.snapshot(),
         }
 
 
@@ -247,6 +297,7 @@ class OutputJitterBuffer:
         self.chunks_played = 0
         self.flushed_chunks = 0
         self.underruns = 0
+        self.prebuffer_gate_waits = 0
 
     @staticmethod
     def estimate_wav_duration_ms(wav_bytes: bytes) -> float:
@@ -270,11 +321,29 @@ class OutputJitterBuffer:
         self._chunks.append(OutputChunk(clause_index=clause_index, audio_bytes=wav_bytes, duration_ms=dur_ms))
         self.buffered_ms += dur_ms
         self.chunks_pushed += 1
+        gate_open = self.buffered_ms >= self.prebuffer_ms
+        if not gate_open:
+            self.prebuffer_gate_waits += 1
         return {
-            "ready": self.buffered_ms >= self.prebuffer_ms or len(self._chunks) >= 1,
+            "ready": gate_open or len(self._chunks) >= 1,
+            "prebuffer_met": gate_open,
             "buffered_ms": round(self.buffered_ms, 1),
             "prebuffer_ms": self.prebuffer_ms,
         }
+
+    def drain_ready(self, force: bool = False) -> List[OutputChunk]:
+        """Release buffered chunks once prebuffer_ms is met (or force-drain at EOF)."""
+        if not self._chunks:
+            return []
+        if not force and self.buffered_ms < self.prebuffer_ms:
+            return []
+        out: List[OutputChunk] = []
+        while self._chunks:
+            ch = self._chunks.popleft()
+            self.buffered_ms = max(0.0, self.buffered_ms - ch.duration_ms)
+            self.chunks_played += 1
+            out.append(ch)
+        return out
 
     def pop_ready(self) -> Optional[OutputChunk]:
         if not self._chunks:
@@ -301,4 +370,5 @@ class OutputJitterBuffer:
             "chunks_played": self.chunks_played,
             "flushed_chunks": self.flushed_chunks,
             "underruns": self.underruns,
+            "prebuffer_gate_waits": self.prebuffer_gate_waits,
         }

@@ -155,10 +155,12 @@ function setWsPill(txt, live = false) {
 function updateJitterPill(ij, oj) {
   const el = $("#jitter-pill");
   if (!el) return;
-  const inEst = ij && ij.jitter_ms_est != null ? `${ij.jitter_ms_est}ms` : "60ms";
+  const inEst = ij && ij.adaptive_target_ms != null ? `${ij.adaptive_target_ms}ms` : (ij && ij.jitter_ms_est != null ? `${ij.jitter_ms_est}ms` : "60ms");
   const reord = ij && ij.out_of_order ? ` · ${ij.out_of_order} reord` : "";
+  const plc = ij && ij.plc_frames ? ` · ${ij.plc_frames} PLC` : "";
+  const snr = ij && ij.vad && ij.vad.estimated_snr_db > 0 ? ` · SNR ${ij.vad.estimated_snr_db}dB` : "";
   const outPre = oj && oj.prebuffer_ms != null ? `${oj.prebuffer_ms}ms` : "120ms";
-  el.textContent = `In-Jitter: ${inEst}${reord} · Out: ${outPre}`;
+  el.textContent = `In-Jitter: ${inEst}${reord}${plc}${snr} · Out: ${outPre}`;
 }
 
 function grabRecentMicPcmB64(maxMs = 450) {
@@ -1802,6 +1804,12 @@ function renderLatency(data) {
   ].filter(r => r[1] != null);
   const scale = Math.max(1, ...rows.map(r => r[1]));
 
+  const slo = (data.pipeline && data.pipeline.slo) || {};
+  const pct = slo.percentiles || {};
+  const sloLine = pct.ttfa_ms && pct.ttfa_ms.count
+    ? `<div class="lat-hist">SLO · TTFA p50/p95: ${pct.ttfa_ms.p50}/${pct.ttfa_ms.p95} ms · Cache ${Math.round((slo.tts_cache_hit_rate || 0) * 100)}%${slo.pii_redactions ? ` · 🔒 ${slo.pii_redactions} PII redacted` : ""}</div>`
+    : "";
+
   const body = $("#latency-body");
   if (body) {
     body.innerHTML =
@@ -1813,7 +1821,8 @@ function renderLatency(data) {
         </div>`).join("")}</div>` +
       (S.latencyHistory.length
         ? `<div class="lat-hist">last turns · ${S.latencyHistory.map(h => `${Math.round(h.ttfa)}/${Math.round(h.total)}`).join("  ·  ")} ms (TTFA / backend)</div>`
-        : "");
+        : "") +
+      sloLine;
   }
 }
 
@@ -2088,12 +2097,15 @@ $("#btn-run-eval").onclick = async () => {
     const data = await res.json();
     const s = data.summary || {};
     const byc = s.by_condition || {};
-    status.textContent = `Completed ${s.total_cases} cases · Domain accuracy ${(s.domain_accuracy * 100).toFixed(1)}% · Overall ${(s.overall_accuracy * 100).toFixed(1)}%`;
+    const mlLabel = s.multilingual_10lang_cases
+      ? ` · 10-Lang Matrix ${s.multilingual_10lang_correct}/${s.multilingual_10lang_cases}`
+      : "";
+    status.textContent = `Completed ${s.total_cases} cases · Domain accuracy ${(s.domain_accuracy * 100).toFixed(1)}% · Overall ${(s.overall_accuracy * 100).toFixed(1)}%${mlLabel}`;
     $("#eval-summary-cards").innerHTML = `
-      <div class="eval-kpi"><b>${s.total_cases || 0}</b><span>Total Cases</span></div>
+      <div class="eval-kpi"><b>${s.total_cases || 0}</b><span>Core Cases</span></div>
       <div class="eval-kpi"><b>${((s.domain_accuracy || 0) * 100).toFixed(0)}%</b><span>Scenario Accuracy</span></div>
       <div class="eval-kpi"><b>${((s.overall_accuracy || 0) * 100).toFixed(0)}%</b><span>Overall (20/20)</span></div>
-      <div class="eval-kpi"><b>${s.avg_turn_ms ?? "—"} ms</b><span>Avg Brain ms</span></div>
+      <div class="eval-kpi"><b>${s.multilingual_10lang_correct ?? "—"}/${s.multilingual_10lang_cases ?? "—"}</b><span>All 10 Gnani Langs</span></div>
       <div class="eval-kpi"><b>${byc.HIGHWAY?.correct ?? 0}/${byc.HIGHWAY?.cases ?? 0}</b><span>NH-44 Highway</span></div>
       <div class="eval-kpi"><b>${byc.GSM?.correct ?? 0}/${byc.GSM?.cases ?? 0}</b><span>8 kHz GSM</span></div>
     `;

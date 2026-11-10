@@ -28,8 +28,16 @@ from typing import Any, Dict, List
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from backend.gnani_client import wrap_pcm_as_wav
+from backend.i18n import ALL_GNANI_LANGUAGES
 from backend.pipeline.brain import Brain
-from backend.pipeline.endpointing import EndpointingState, analyze_wav_endpoint
+from backend.pipeline.endpointing import (
+    AutoVADDetector,
+    EndpointingState,
+    analyze_wav_endpoint,
+    denoise_wav_for_stt,
+)
+from backend.pipeline.jitter_buffer import InputJitterBuffer
+from backend.pipeline.safety import redact_pii
 
 RESULTS_PATH = Path(__file__).resolve().parent / "eval_results.json"
 
@@ -285,6 +293,11 @@ async def run_eval_suite(persist_history: bool = False) -> Dict[str, Any]:
 
     domain_rows = [r for r in rows if r["condition"] in CONDITIONS]
     all_correct = sum(1 for r in rows if r.get("domain_correct"))
+
+    ml_rows = await _run_multilingual_matrix(persist_history=persist_history)
+    ml_correct = sum(1 for r in ml_rows if r.get("domain_correct"))
+    eng_checks = _verify_engineering_layers()
+
     summary = {
         "total_cases": len(rows),
         "scenarios": len(SCENARIOS),
@@ -293,6 +306,10 @@ async def run_eval_suite(persist_history: bool = False) -> Dict[str, Any]:
             sum(1 for r in domain_rows if r["domain_correct"]) / max(1, len(domain_rows)), 3
         ),
         "overall_accuracy": round(all_correct / max(1, len(rows)), 3),
+        "multilingual_10lang_cases": len(ml_rows),
+        "multilingual_10lang_correct": ml_correct,
+        "multilingual_10lang_accuracy": round(ml_correct / max(1, len(ml_rows)), 3),
+        "engineering_checks": eng_checks,
         "avg_turn_ms": round(
             sum(r["reply_ms"] for r in rows if isinstance(r.get("reply_ms"), (int, float)))
             / max(1, len([r for r in rows if isinstance(r.get("reply_ms"), (int, float))])),
@@ -319,6 +336,8 @@ async def run_eval_suite(persist_history: bool = False) -> Dict[str, Any]:
         "summary": summary,
         "latency_waterfall_ms": waterfall_latencies,
         "rows": rows,
+        "multilingual_rows": ml_rows,
+        "engineering_checks": eng_checks,
     }
     try:
         RESULTS_PATH.write_text(json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -327,14 +346,155 @@ async def run_eval_suite(persist_history: bool = False) -> Dict[str, Any]:
     return out
 
 
-if __name__ == "__main__":
-    import asyncio
+_MULTILINGUAL_MATRIX: Dict[str, Dict[str, str]] = {
+    "hi-IN": {
+        "wf_b": "Haan safe hain, NH-44 highway par radiator phat gaya hai, policy 7820",
+        "wf_a": "Delhi mein battery dead ho gayi hai, koi chot nahi",
+        "emg": "Accident ho gaya, sar mein chot aur khoon beh raha hai",
+    },
+    "ta-IN": {
+        "wf_b": "வணக்கம், எங்களுக்கு காயமில்லை, தேசிய நெடுஞ்சாலையில் ரேடியேட்டர் உடைஞ்சிடுச்சு, பாலிசி 7820",
+        "wf_a": "சென்னை நகரத்தில் பேட்டரி பழுதாகிடுச்சு, காயமில்லை",
+        "emg": "விபத்து, இரத்தம் வருது காயம் ஏற்பட்டது",
+    },
+    "te-IN": {
+        "wf_b": "నమస్కారం, మాకు గాయం లేదు, జాతీయ రహదారిపై రేడియేటర్ పాడైపోయింది, పాలసీ 7820",
+        "wf_a": "హైదరాబాద్ నగరంలో బ్యాటరీ పాడైంది, గాయం లేదు",
+        "emg": "యాక్సిడెంట్ అయింది, రక్తం వస్తోంది గాయమైంది",
+    },
+    "kn-IN": {
+        "wf_b": "ನಮಸ್ಕಾರ, ಯಾರಿಗೂ ಗಾಯ ಇಲ್ಲ, ರಾಷ್ಟ್ರೀಯ ಹೆದ್ದಾರಿಯಲ್ಲಿ ರೇಡಿಯೇಟರ್ ಹಾಳಾಗಿದೆ, ಪಾಲಿಸಿ 7820",
+        "wf_a": "ಬೆಂಗಳೂರು ನಗರದಲ್ಲಿ ಬ್ಯಾಟರಿ ಹಾಳಾಗಿದೆ, ಗಾಯ ಇಲ್ಲ",
+        "emg": "ಅಪಘಾತ ಆಗಿದೆ, ರಕ್ತ ಬರುತ್ತಿದೆ ಗಾಯವಾಗಿದೆ",
+    },
+    "ml-IN": {
+        "wf_b": "നമസ്കാരം, ആർക്കും പരിക്കില്ല, ദേശീയപാതയിൽ റേഡിയേറ്റർ തകരാറായി, പോളിസി 7820",
+        "wf_a": "കൊച്ചി നഗരത്തിൽ ബാറ്ററി തീർന്നു, പരിക്കില്ല",
+        "emg": "അപകടം പറ്റി, രക്തം വരുന്നു പരിക്കേറ്റു",
+    },
+    "bn-IN": {
+        "wf_b": "নমস্কার, কারও চোট লাগেনি, জাতীয় সড়কে রেডিয়েটর খারাপ হয়ে গেছে, পলিসি 7820",
+        "wf_a": "কলকাতা শহরে ব্যাটারি শেষ হয়েছে, চোট লাগেনি",
+        "emg": "দুর্ঘটনা হয়েছে, রক্ত পড়ছে আঘাত লেগেছে",
+    },
+    "mr-IN": {
+        "wf_b": "नमस्कार, कोणालाही जखम नाही, राष्ट्रीय महामार्गावर रेडिएटर फुटला आहे, पॉलिसी 7820",
+        "wf_a": "पुणे शहरात बॅटरी खराब झाली आहे, जखम नाही",
+        "emg": "अपघात झाला, रक्त येतंय दुखापत झाली",
+    },
+    "gu-IN": {
+        "wf_b": "નમસ્તે, કોઈને ઈજા નથી, નેશનલ હાઇવે પર રેડિએટર તૂટી ગયું છે, પોલિસી 7820",
+        "wf_a": "અમદાવાદ શહેરમાં બેટરી ખરાબ થઈ છે, ઈજા નથી",
+        "emg": "અકસ્માત થયો છે, લોહી નીકળે છે ઈજા થઈ",
+    },
+    "pa-IN": {
+        "wf_b": "ਸਤ ਸ੍ਰੀ ਅਕਾਲ, ਕਿਸੇ ਨੂੰ ਸੱਟ ਨਹੀਂ, ਨੈਸ਼ਨਲ ਹਾਈਵੇ 'ਤੇ ਰੇਡੀਏਟਰ ਟੁੱਟ ਗਿਆ, ਪਾਲਿਸੀ 7820",
+        "wf_a": "ਲੁਧਿਆਣਾ ਸ਼ਹਿਰ ਵਿੱਚ ਬੈਟਰੀ ਖਰਾਬ ਹੋ ਗਈ, ਕੋਈ ਸੱਟ ਨਹੀਂ",
+        "emg": "ਹਾਦਸਾ ਹੋ ਗਿਆ, ਖੂਨ ਵਗ ਰਿਹਾ ਸੱਟ ਲੱਗੀ",
+    },
+    "en-IN": {
+        "wf_b": "Everyone is safe, our car radiator broke on the national highway, policy 7820",
+        "wf_a": "We are in Bengaluru city and the battery is dead, no injuries",
+        "emg": "Major accident, driver is bleeding with a head injury",
+    },
+}
 
+
+async def _run_multilingual_matrix(persist_history: bool = False) -> List[Dict[str, Any]]:
+    ml_rows: List[Dict[str, Any]] = []
+    brain = Brain(persist_history=persist_history)
+    for lang in ALL_GNANI_LANGUAGES:
+        samples = _MULTILINGUAL_MATRIX[lang]
+        for kind, utt in samples.items():
+            cid = f"eval-ml-{lang}-{kind}-{uuid.uuid4().hex[:5]}"
+            await brain.start_call(cid)
+            t0 = time.perf_counter()
+            res = await brain.process_turn(cid, utt)
+            ms = round((time.perf_counter() - t0) * 1000, 1)
+            brain.reset_call(cid)
+            ents = res["entities"]
+            if kind == "wf_b":
+                ok = (
+                    res["language"] == lang
+                    and ents.get("policy_number") == "7820"
+                    and ents.get("road_type") == "NH"
+                    and "radiator" in (ents.get("parts") or [])
+                    and res["stage"] == "confirm"
+                )
+            elif kind == "wf_a":
+                ok = (
+                    res["language"] == lang
+                    and (ents.get("last_dispatch") or {}).get("workflow") == "A"
+                    and res["stage"] == "done"
+                )
+            else:
+                ok = (
+                    res["language"] == lang
+                    and bool(ents.get("injured"))
+                    and res["stage"] == "emergency_handoff"
+                )
+            ml_rows.append({
+                "case_id": f"ML-{lang}-{kind.upper()}",
+                "language": lang,
+                "workflow_kind": kind,
+                "detected_language": res["language"],
+                "stage": res["stage"],
+                "domain_correct": bool(ok),
+                "reply_ms": ms,
+            })
+    return ml_rows
+
+
+def _verify_engineering_layers() -> Dict[str, Any]:
+    # 1. 80Hz high-pass diesel rumble attenuation check (50Hz tone)
+    samples_50hz = [int(14000 * math.sin(2 * math.pi * 50.0 * i / 16000)) for i in range(1600)]
+    pcm_50hz = struct.pack(f"<{len(samples_50hz)}h", *samples_50hz)
+    _, dsp_meta = denoise_wav_for_stt(wrap_pcm_as_wav(pcm_50hz, sample_rate=16000))
+    dsp_ok = bool(dsp_meta.get("dsp_applied") and dsp_meta.get("attenuation_db", 0.0) >= 3.0)
+
+    # 2. PLC gap recovery + spec-compliant RIFF header check
+    ij = InputJitterBuffer(sample_rate=16000, target_jitter_ms=40)
+    speech_frame = struct.pack("<320h", *([4500] * 320))
+    for seq in (0, 1, 2, 4, 5, 6, 7):  # seq=3 dropped -> PLC fills gap
+        ij.push(speech_frame, seq=seq)
+    wav = ij.take_utterance_wav(include_preroll_if_empty=True)
+    riff_size = struct.unpack_from("<I", wav, 4)[0] if len(wav) > 44 else 0
+    plc_ok = ij.plc_frames >= 1 and riff_size == (len(wav) - 8)
+
+    # 3. Adaptive noise floor tracking check (-28 dBFS steady noise)
+    vad = AutoVADDetector(sample_rate=16000)
+    steady_noise = struct.pack("<320h", *([1300] * 320))
+    for _ in range(15):
+        vad.feed(steady_noise)
+    vad_ok = vad.noise_floor_dbfs > -50.0
+
+    # 4. DPDP PII redaction check
+    sample_pii = "Aadhaar 1234 5678 9012 PAN ABCDE1234F phone +91 9876543210 policy 7820"
+    redacted, n_pii = redact_pii(sample_pii)
+    pii_ok = (
+        n_pii == 3
+        and "1234 5678 9012" not in redacted
+        and "ABCDE1234F" not in redacted
+        and "9876543210" not in redacted
+        and "7820" in redacted
+    )
+    return {
+        "dsp_highpass_80hz_ok": dsp_ok,
+        "dsp_50hz_attenuation_db": dsp_meta.get("attenuation_db", 0.0),
+        "plc_gap_recovery_ok": plc_ok,
+        "adaptive_noise_floor_ok": vad_ok,
+        "dpdp_pii_redaction_ok": pii_ok,
+        "all_passed": bool(dsp_ok and plc_ok and vad_ok and pii_ok),
+    }
+
+
+if __name__ == "__main__":
     report = asyncio.run(run_eval_suite(persist_history=False))
     print(json.dumps(report["summary"], indent=2, ensure_ascii=False))
     print("Latency waterfall (ms):", json.dumps(report["latency_waterfall_ms"], ensure_ascii=False))
     failed = [r for r in report["rows"] if not r.get("domain_correct")]
-    if failed:
-        print("Failed cases:", [r["id"] for r in failed])
+    ml_failed = [r for r in report["multilingual_rows"] if not r.get("domain_correct")]
+    if failed or ml_failed or not report["engineering_checks"]["all_passed"]:
+        print("Failed cases:", [r.get("case_id", r.get("id")) for r in failed + ml_failed])
         sys.exit(1)
 
