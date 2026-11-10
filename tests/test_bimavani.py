@@ -11,7 +11,6 @@ import base64
 import json
 import math
 import struct
-from pathlib import Path
 from typing import Any, Dict
 
 import httpx
@@ -19,7 +18,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend import eval_runner, gnani_client
-from backend.main import APP_ROOT, BRAIN, app
+from backend.main import BRAIN, app
 from backend.pipeline.barge_in import TurnStateMachine
 from backend.pipeline.brain import Brain, _MEMORY_PATH
 from backend.pipeline.clause_buffer import ClauseBuffer, split_into_clauses

@@ -25,16 +25,13 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from backend.i18n import (
-    ALL_GNANI_LANGUAGES,
     LANG_META,
     SCRIPT_REGEX_BY_LANG,
-    STRINGS,
     format_range,
     get_lang_bundle,
     normalize_lang_code,
 )
 from backend.rsa_and_claim_rules import (
-    IRDAI,
     PARTS,
     POLICIES,
     _keyword_negated_in_text,
@@ -56,11 +53,6 @@ from backend.translit import detect_script_language, normalize_for_matching
 
 _MEMORY_PATH = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) / "data" / "call_history.json"
 _HISTORY_LOCK = threading.Lock()
-
-GREETING_CLAUSE_1 = STRINGS["hi-IN"]["greet_1"]
-GREETING_CLAUSE_2 = STRINGS["hi-IN"]["greet_2"]
-GREETING_CLAUSE_1_TA = STRINGS["ta-IN"]["greet_1"]
-GREETING_CLAUSE_2_TA = STRINGS["ta-IN"]["greet_2"]
 
 _normalize_lang_code = normalize_lang_code
 
@@ -227,28 +219,6 @@ class CallMemory:
             "ticket_status": self.ticket_status,
             "incident_speakable": self.incident_speakable,
         }
-
-
-def load_long_term() -> List[Dict[str, Any]]:
-    try:
-        with _HISTORY_LOCK:
-            if _MEMORY_PATH.exists() and _MEMORY_PATH.stat().st_size > 2:
-                with open(_MEMORY_PATH, "r", encoding="utf-8") as fh:
-                    data = json.load(fh)
-                    return data if isinstance(data, list) else []
-    except Exception:
-        pass
-    return []
-
-
-def save_long_term(records: List[Dict[str, Any]]) -> None:
-    try:
-        with _HISTORY_LOCK:
-            _MEMORY_PATH.parent.mkdir(parents=True, exist_ok=True)
-            with open(_MEMORY_PATH, "w", encoding="utf-8") as fh:
-                json.dump(records[-200:], fh, indent=2, ensure_ascii=False)
-    except Exception:
-        pass
 
 
 def append_long_term(record: Dict[str, Any]) -> None:
@@ -562,10 +532,6 @@ def _agent_context(mem: "CallMemory", transcript: str,
             "Injury: 112 ambulance + police + human handoff only.",
         ],
     }
-
-
-def _linguist_fallback_entities(transcript: str, base_entities: Dict[str, Any]) -> Dict[str, Any]:
-    return dict(base_entities)
 
 
 # ---------------------------------------------------------------------------

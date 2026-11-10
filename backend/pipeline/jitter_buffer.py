@@ -36,15 +36,6 @@ from backend.pipeline.endpointing import (
     frame_rms_dbfs,
 )
 
-BYTES_PER_20MS_16K = 640  # 320 int16 samples @ 16kHz
-
-
-@dataclass
-class InputFrame:
-    seq: int
-    ts_ms: float
-    pcm: bytes
-
 
 def _attenuate_pcm16(frame: bytes, gain: float) -> bytes:
     """Apply smooth PLC decay gain to a 16-bit PCM frame."""
@@ -344,15 +335,6 @@ class OutputJitterBuffer:
             self.chunks_played += 1
             out.append(ch)
         return out
-
-    def pop_ready(self) -> Optional[OutputChunk]:
-        if not self._chunks:
-            self.underruns += 1
-            return None
-        ch = self._chunks.popleft()
-        self.buffered_ms = max(0.0, self.buffered_ms - ch.duration_ms)
-        self.chunks_played += 1
-        return ch
 
     def flush(self) -> int:
         n = len(self._chunks)
