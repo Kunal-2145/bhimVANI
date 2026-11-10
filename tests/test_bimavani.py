@@ -1090,4 +1090,83 @@ def test_all_10_gnani_languages_config_stt_tts_voices_and_frontend_options(monke
         BRAIN.persist_history = orig_persist
 
 
+def test_ask_part_pol_note_no_placeholder_leak_all_10_languages():
+    from backend.i18n import ALL_GNANI_LANGUAGES
+
+    async def _run():
+        b = Brain(persist_history=False)
+        for lang in ALL_GNANI_LANGUAGES:
+            cid = f"polnote-{lang}"
+            await b.start_call(cid, language=lang)
+            await b.process_turn(cid, "7820", language=lang)
+            r = await b.process_turn(cid, "gaadi kharab ho gayi", language=lang)
+            assert "{pol_note}" not in r["reply_text"]
+            assert "{pol}" not in r["reply_text"]
+            assert "7820" in r["reply_text"]
+
+            cid2 = f"nopol-{lang}"
+            await b.start_call(cid2, language=lang)
+            r2 = await b.process_turn(cid2, "gaadi kharab ho gayi", language=lang)
+            assert "{pol_note}" not in r2["reply_text"]
+
+    asyncio.run(_run())
+
+
+def test_negation_drivability_marathi_lock_and_ws_error_resilience(monkeypatch):
+    from backend.rsa_and_claim_rules import extract_road_type
+
+    # 1. Mixed Devanagari/Latin 4-word road negation ("city के highway पे कहीं भी नहीं हूँ")
+    assert extract_road_type("city के highway पे कहीं भी नहीं हूँ") == "CITY"
+
+    async def _run():
+        b = Brain(persist_history=False)
+
+        # 2. Negated problem word ("हम कोई दिक्कत की बात को नहीं") stays in safe/incident flow
+        await b.start_call("neg-prob-1")
+        r_safe = await b.process_turn("neg-prob-1", "अरे भाई, कति safe! हम कोई दिक्कत की बात को नहीं।")
+        assert "{pol_note}" not in r_safe["reply_text"]
+        assert r_safe["ticket_status"] == "STAGE 2 — INCIDENT DETAILS IN PROGRESS"
+
+        # 3. Cross-turn non-drivable flag survives follow-up road turn with parts=[]
+        await b.start_call("nd-cross-1")
+        r1 = await b.process_turn("nd-cross-1", "गाड़ी चलने लायक नहीं है")
+        assert r1["entities"]["is_drivable"] is False
+        r2 = await b.process_turn("nd-cross-1", "NH-44 par hoon, policy 7820 hai")
+        assert r2["entities"]["is_drivable"] is False
+
+        # 4. Marathi session stays mr-IN on short Devanagari turns like policy number
+        await b.start_call("mr-lock-1", language="mr-IN")
+        rm = await b.process_turn("mr-lock-1", "पॉलिसी नंबर 7820")
+        assert rm["language"] == "mr-IN"
+
+    asyncio.run(_run())
+
+    # 5. WebSocket _stream_turn exception emits error + turn_complete instead of hanging client
+    orig_persist = BRAIN.persist_history
+    BRAIN.persist_history = False
+
+    async def _boom(*a, **kw):
+        raise RuntimeError("simulated brain failure")
+
+    try:
+        with TestClient(app) as client:
+            with client.websocket_connect("/ws/call/ws-err-resilience") as ws:
+                assert ws.receive_json()["type"] == "ready"
+                monkeypatch.setattr(BRAIN, "process_turn", _boom)
+                ws.send_json({"type": "end_turn", "transcript_override": "hello"})
+                seen = []
+                for _ in range(10):
+                    ev = ws.receive_json()
+                    seen.append(ev["type"])
+                    if ev["type"] == "turn_complete":
+                        break
+                assert "error" in seen
+                assert "turn_complete" in seen
+                ws.send_json({"type": "ping"})
+                assert ws.receive_json()["type"] == "pong"
+    finally:
+        BRAIN.persist_history = orig_persist
+
+
+
 

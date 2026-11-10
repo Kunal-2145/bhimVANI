@@ -325,3 +325,16 @@ async def run_eval_suite(persist_history: bool = False) -> Dict[str, Any]:
     except Exception:
         pass
     return out
+
+
+if __name__ == "__main__":
+    import asyncio
+
+    report = asyncio.run(run_eval_suite(persist_history=False))
+    print(json.dumps(report["summary"], indent=2, ensure_ascii=False))
+    print("Latency waterfall (ms):", json.dumps(report["latency_waterfall_ms"], ensure_ascii=False))
+    failed = [r for r in report["rows"] if not r.get("domain_correct")]
+    if failed:
+        print("Failed cases:", [r["id"] for r in failed])
+        sys.exit(1)
+

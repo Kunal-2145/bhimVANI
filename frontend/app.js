@@ -993,12 +993,23 @@ function browserStopAudio() {
   return performance.now();
 }
 
+function resolvePendingWsTurn(val = null) {
+  if (WS.pendingTurnResolve) {
+    const r = WS.pendingTurnResolve;
+    WS.pendingTurnResolve = null;
+    r(val);
+  }
+}
+
 function beginUserTurnAfterBargeIn(userTalking = false) {
   VAD.awaiting = false;
+  S.awaitingAgentReply = false;
+  resolvePendingWsTurn(null);
   VAD.isUserSpeaking = !!(userTalking && S.mode === "auto_vad" && !S.micDenied);
   VAD.speechStartT = performance.now() - VAD.preRollMs;
   VAD.speechMs = 0; VAD.silMs = 0;
   updateMicBtn();
+  maybeEnableBarge();
   if (S.mode === "auto_vad" && !S.micDenied && S.callActive) startVad();
 }
 
@@ -1135,6 +1146,14 @@ async function handleWsMessage(msg) {
     if (msg.input_jitter) updateJitterPill(msg.input_jitter, null);
     return;
   }
+  if (msg.type === "error") {
+    S.awaitingAgentReply = false;
+    VAD.awaiting = false;
+    maybeEnableBarge();
+    setCallState(`⚠️ ${msg.error || "Turn error — ready to continue"}`);
+    resolvePendingWsTurn(null);
+    return;
+  }
   if (msg.type === "barge_in_ack") {
     litStage(7, msg.flush_latency_ms, { hold: true });
     applyInterruptedContext(msg.interrupted_context);
@@ -1153,6 +1172,8 @@ async function handleWsMessage(msg) {
         await playClausesFromPayload(msg.cards.clauses, msg.cards.reply_text);
       }
       await agentDoneReplying();
+    } else {
+      resolvePendingWsTurn(null);
     }
     return;
   }
@@ -1305,6 +1326,7 @@ async function sendTurn(wavB64, transcriptOverride) {
   const explicitLang = explicitSelectedLang();
   try {
     if (WS.open && WS.sock && WS.sock.readyState === 1) {
+      resolvePendingWsTurn(null);
       const done = await new Promise((resolve) => {
         WS.pendingTurnResolve = resolve;
         WS.sock.send(JSON.stringify({
@@ -1317,8 +1339,11 @@ async function sendTurn(wavB64, transcriptOverride) {
           stt_language: S.languagePref,
         }));
       });
-      if (done) {
+      if (done && !done.error) {
         await waitForStreamingPlayback(S.lastTurnResult?.reply_text || "", S.lastTurnResult?.language || S.detectedLang);
+        return;
+      }
+      if (done && done.error) {
         return;
       }
     }
