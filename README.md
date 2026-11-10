@@ -1,7 +1,7 @@
 # BimaVani (बीमा-वाणी) 🛣️
 ### 24×7 Multilingual Voice-First Roadside Assistance + IRDAI Claim Desk — Helpline `1-800-BIMA-VANI`
 
-📄 **[Read the 1-Page Project Pitch (`PITCH.md`)](PITCH.md)** · 📊 **[Benchmarks (`EVALUATION.md`)](EVALUATION.md)** · 🚀 **[Run & Submit Guide (`HOW_TO_USE_AND_SUBMIT.md`)](HOW_TO_USE_AND_SUBMIT.md)**
+[![BimaVani CI](https://github.com/Kunal-2145/bhimVANI/actions/workflows/ci.yml/badge.svg)](https://github.com/Kunal-2145/bhimVANI/actions/workflows/ci.yml) · 📄 **[1-Page Project Pitch (`PITCH.md`)](PITCH.md)** · 📊 **[Benchmarks (`EVALUATION.md`)](EVALUATION.md)** · 🚀 **[Run & Submit Guide (`HOW_TO_USE_AND_SUBMIT.md`)](HOW_TO_USE_AND_SUBMIT.md)**
 
 A production-grade voice-AI system proving **one thesis end-to-end**:
 
