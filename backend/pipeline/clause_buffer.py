@@ -21,14 +21,40 @@ MAX_CLAUSES = 2
 _HOOK_SPLIT_PATTERNS = [
     r"Shukar hai[^.!?]*[.!?]",
     r"Theek hai[^.!?]*[.!?]",
-    r"Samajh gaya[^.!?]*[.!?]",
+    r"Samajh gay[ai][^.!?]*[.!?]",
     r"Aapki jaan[^.!?]*[.!?]",
     r"Bilkul[^.!?]*[.!?]",
     r"Achha ji[^.!?]*[.!?]",
     r"Haan ji[^.!?]*[.!?]",
     r"Arre[^.!?]*[.!?]",
+    r"Namaste[^.!?]*[.!?]",
+    r"Confirm ho gaya[^.!?]*[.!?]",
 ]
+# Protected dotted acronyms / titles that must NEVER trigger a sentence split
+_DOT_ABBREV_RE = re.compile(
+    r"\b(?:I\.R\.D\.A\.I\.|N\.H\.|Pvt\.|Ltd\.|Dr\.|Mr\.|Mrs\.|Rs\.|No\.|St\.)",
+    re.IGNORECASE,
+)
 _FALLBACK_SPLIT_RE = re.compile(r"(?<=[.!?।])\s+")
+
+
+def _split_sentences(text: str) -> List[str]:
+    """Split on real sentence boundaries without breaking dotted acronyms."""
+    placeholders: Dict[str, str] = {}
+
+    def _mask(m: re.Match[str]) -> str:
+        tok = f"__ABBR_{len(placeholders)}__"
+        placeholders[tok] = m.group(0)
+        return tok
+
+    masked = _DOT_ABBREV_RE.sub(_mask, text)
+    parts = [s.strip() for s in _FALLBACK_SPLIT_RE.split(masked) if s.strip()]
+    out: List[str] = []
+    for p in parts:
+        for tok, orig in placeholders.items():
+            p = p.replace(tok, orig)
+        out.append(p)
+    return out
 
 
 @dataclass
@@ -38,10 +64,13 @@ class ClauseBatch:
     created_at: float = field(default_factory=time.time)
 
     def add(self, text: str, is_priority: bool) -> None:
+        clean = (text or "").strip()
+        if not clean:
+            return
         self.clauses.append(
             {
                 "index": len(self.clauses) + 1,
-                "text": text,
+                "text": clean,
                 "priority": "clause1_fast_hook" if is_priority else "clause2_details",
                 "tts_order": 1 if is_priority else 2,
             }
@@ -52,41 +81,38 @@ class ClauseBatch:
 
 
 def split_into_clauses(reply_text: str, turn_id: str = "t0") -> ClauseBatch:
-    """Split ONE agent reply into AT MOST 2 clauses (never more).
-
-    Strategy:
-      1. If two sentences with '.'/'!"/'?' AND first matches a hook pattern
-         -> (hook, remainder).
-      2. Else split on the FIRST sentence boundary (hook = sentence 1).
-      3. If no boundary exists and text is long, split at the comma nearest
-         to 40% of the length (spoken cadence point).
-      4. Never emit >2 or 0 clauses; empty input -> a single neutral clause.
-    """
+    """Split ONE agent reply into 1 or 2 non-empty clauses (never >2)."""
     text = (reply_text or "").strip()
     batch = ClauseBatch(turn_id=turn_id)
     if not text:
-        batch.add("Ji, boliye main aapki madad kar raha hoon.", True)
+        batch.add("Ji, boliye main aapki madad kar rahi hoon.", True)
         return batch
 
-    sentences = [s.strip() for s in _FALLBACK_SPLIT_RE.split(text) if s.strip()]
+    sentences = _split_sentences(text)
     if len(sentences) >= 2 and _matches_hook(sentences[0]):
         batch.add(sentences[0], True)
         batch.add(" ".join(sentences[1:]), False)
         return batch
 
     if len(sentences) >= 2:
-        batch.add(sentences[0], not _matches_hook(sentences[0]))
+        batch.add(sentences[0], True)
         batch.add(" ".join(sentences[1:]), False)
         return batch
 
-    # single sentence
     if len(text) <= 120:
         batch.add(text, True)
         return batch
 
     cut = _best_comma_cut(text)
-    batch.add(text[:cut].strip(), True)
-    batch.add(text[cut:].strip(), False)
+    if 0 < cut < len(text):
+        left = text[:cut].strip()
+        right = text[cut:].strip()
+        if left and right:
+            batch.add(left, True)
+            batch.add(right, False)
+            return batch
+
+    batch.add(text, True)
     return batch
 
 
@@ -117,7 +143,6 @@ class ClauseBuffer:
 
     def ingest(self, turn_id: str, reply_text: str) -> ClauseBatch:
         batch = split_into_clauses(reply_text, turn_id)
-        # hard enforcement: never more than MAX_CLAUSES
         if len(batch.clauses) > MAX_CLAUSES:
             keep = batch.clauses[:MAX_CLAUSES]
             keep[-1]["text"] = " ".join(c["text"] for c in batch.clauses[MAX_CLAUSES - 1:])

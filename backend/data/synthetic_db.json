@@ -125,7 +125,6 @@
         "steam",
         "smoke",
         "overheat",
-        "circulated",
         "leak"
       ],
       "keywords_hi": [
@@ -135,7 +134,6 @@
         "coolant",
         "bhaap",
         "paani",
-        "geyar",
         "overheat",
         "leak",
         "kulaint"
@@ -163,7 +161,6 @@
         "bumper",
         "dant",
         "cratch",
-        "ladi",
         "dent"
       ]
     },
@@ -203,7 +200,7 @@
       "zero_dep_zero_cost": true,
       "keywords_en": [
         "mirror",
-        "orel",
+        "side mirror",
         "rear view"
       ],
       "keywords_hi": [
@@ -251,18 +248,21 @@
       "keywords_en": [
         "puncture",
         "flat tyre",
+        "flat tire",
         "tyre flat",
-        "air"
+        "air leak"
       ],
       "keywords_hi": [
         "punchchar",
         "puncher",
         "puncture",
         "paunchhar",
-        "hawa",
+        "hawa nikal",
+        "hawa kam",
+        "hawa nahi",
+        "hava nikal",
         "taayar",
-        "panchar",
-        "havaa"
+        "panchar"
       ]
     },
     "battery": {
@@ -278,19 +278,17 @@
       "do_not_claim": true,
       "keywords_en": [
         "battery",
-        "dead",
-        "not starting",
-        "self off"
+        "dead battery",
+        "battery dead",
+        "battery down",
+        "jump start"
       ],
       "keywords_hi": [
         "battery",
         "batteri",
         "self nahi",
-        "start nahi",
-        "staart",
-        "staart nahin",
-        "baitari",
-        "ded"
+        "battery khatam",
+        "baitari"
       ]
     },
     "front_guard": {
@@ -305,6 +303,7 @@
       "depreciation_pct": 30,
       "zero_dep_zero_cost": true,
       "keywords_en": [
+        "front guard",
         "guard",
         "panel",
         "side swipe",
@@ -335,8 +334,9 @@
       "keywords_hi": [
         "clutch",
         "klach",
-        "taar",
-        "kat"
+        "clutch taar",
+        "taar kat",
+        "wire kat"
       ]
     },
     "fuel_out": {
@@ -352,15 +352,19 @@
       "do_not_claim": true,
       "keywords_en": [
         "fuel",
+        "out of fuel",
         "petrol over",
         "no petrol",
+        "no fuel",
         "diesel over"
       ],
       "keywords_hi": [
         "petrol khatam",
-        "fuel",
-        "khatam",
-        "khatm"
+        "diesel khatam",
+        "fuel khatam",
+        "tel khatam",
+        "tanki khali",
+        "fuel"
       ]
     },
     "ev_system_stuck": {
@@ -374,18 +378,20 @@
       ],
       "depreciation_pct": 15,
       "keywords_en": [
-        "ev",
-        "electric",
+        "ev system",
+        "ev fault",
+        "ev stuck",
+        "ev problem",
         "system fault",
-        "traction",
-        "not moving"
+        "drive disabled",
+        "traction"
       ],
       "keywords_hi": [
-        "ev",
-        "electric",
-        "system",
-        "chla nahi",
-        "rok"
+        "ev system",
+        "ev fault",
+        "ev stuck",
+        "electric fault",
+        "ev rok"
       ]
     }
   },
@@ -456,6 +462,19 @@
       "phone": "090-SYN-005"
     },
     {
+      "id": "g_delhi_motors",
+      "name": "Delhi NCR Cashless Auto Hub",
+      "city": "New Delhi",
+      "road_type": "CITY",
+      "highway": null,
+      "km_marker": null,
+      "cashless": true,
+      "network": "MDRT-CASHLESS-NET",
+      "services_2w": false,
+      "services_ev": false,
+      "phone": "090-SYN-007"
+    },
+    {
       "id": "g_rural_karnal_link",
       "name": "Karnal Link Road Workshop (Reimb. Only)",
       "city": "Karnal Rural",
@@ -467,6 +486,19 @@
       "services_2w": true,
       "services_ev": false,
       "phone": "090-SYN-006"
+    },
+    {
+      "id": "g_rural_panipat_4w",
+      "name": "Panipat Tehsil Motor Works (Reimb. Only)",
+      "city": "Panipat Rural",
+      "road_type": "RURAL",
+      "highway": "Assandh-Panipat Link Road",
+      "km_marker": null,
+      "cashless": false,
+      "network": "REIMBURSEMENT-ONLY",
+      "services_2w": false,
+      "services_ev": false,
+      "phone": "090-SYN-008"
     }
   ],
   "rsa_workflows": {

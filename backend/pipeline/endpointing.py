@@ -85,13 +85,15 @@ class AutoVADDetector:
     def __init__(self, sample_rate: int = 16000,
                  vad_silence_ms: int = DEFAULT_VAD_SILENCE_MS,
                  speech_dbfs: float = DEFAULT_SPEECH_DBFS,
-                 silence_dbfs: float = DEFAULT_SILENCE_DBFS):
+                 silence_dbfs: float = DEFAULT_SILENCE_DBFS,
+                 min_speech_ms: int = MIN_SPEECH_MS):
         self.sample_rate = sample_rate
         self.silence_ms_needed = vad_silence_ms
         self.speech_dbfs = speech_dbfs
         self.silence_dbfs = silence_dbfs
-        self._speech_ms = 0
-        self._silence_ms = 0
+        self.min_speech_ms = min_speech_ms
+        self._speech_ms = 0.0
+        self._silence_ms = 0.0
         self._in_speech = False
 
     def _frame_ms(self, frame: bytes) -> float:
@@ -103,21 +105,62 @@ class AutoVADDetector:
         db = frame_rms_dbfs(frame)
         if db >= self.speech_dbfs:
             self._speech_ms += ms
-            self._silence_ms = 0
-            if not self._in_speech and self._speech_ms >= 40:
+            self._silence_ms = 0.0
+            if not self._in_speech and self._speech_ms >= self.min_speech_ms:
                 self._in_speech = True
                 return "speech"
             return "none"
-        if self._in_speech:
+        if not self._in_speech:
+            # Decay transient burst energy so brief horn spikes don't accumulate
+            self._speech_ms = max(0.0, self._speech_ms - ms)
+            return "none"
+        if db < self.silence_dbfs:
             self._silence_ms += ms
-            if db < self.silence_dbfs and self._silence_ms >= self.silence_ms_needed:
+            if self._silence_ms >= self.silence_ms_needed:
                 self._in_speech = False
-                self._speech_ms = self._silence_ms = 0
+                self._speech_ms = self._silence_ms = 0.0
                 return "endpoint"
+        else:
+            # Mid-band (-44..-34 dBFS): speech tail/breath, not clean silence
+            self._silence_ms = 0.0
         return "none"
 
     def push_to_talk_active(self) -> bool:
         return False   # push-to-talk short-circuits VAD entirely
+
+
+def analyze_wav_endpoint(wav_bytes: bytes, state: EndpointingState) -> Dict[str, Any]:
+    """Run 20ms frame analysis over incoming WAV bytes for real Stage-3 telemetry."""
+    import time as _time
+    t0 = _time.perf_counter()
+    pcm = wav_bytes[44:] if len(wav_bytes) > 44 and wav_bytes[:4] == b"RIFF" else b""
+    frames = chunk_frames(pcm, sample_rate=16000, frame_ms=FRAME_MS) if pcm else []
+    vad = AutoVADDetector(
+        sample_rate=16000,
+        vad_silence_ms=state.vad_silence_ms,
+        speech_dbfs=state.speech_dbfs,
+        silence_dbfs=state.silence_dbfs,
+    )
+    speech_frames = 0
+    endpoint_detected = False
+    peak_db = -120.0
+    for f in frames:
+        db = frame_rms_dbfs(f)
+        if db > peak_db:
+            peak_db = db
+        if is_speech_frame(f, state.speech_dbfs):
+            speech_frames += 1
+        if vad.feed(f) == "endpoint":
+            endpoint_detected = True
+    tel = endpoint_turn(state)
+    tel.update({
+        "frames": len(frames),
+        "speech_frames": speech_frames,
+        "peak_dbfs": round(peak_db, 1),
+        "vad_endpoint_detected": endpoint_detected,
+        "latency_ms": round((_time.perf_counter() - t0) * 1000, 2),
+    })
+    return tel
 
 
 def endpoint_turn(state: EndpointingState) -> Dict[str, Any]:

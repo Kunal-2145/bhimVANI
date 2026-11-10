@@ -1,19 +1,5 @@
 /* ============================================================
-   BimaVani — frontend/app.js (Round 2)
-   ============================================================
-   R1  📞 Call → WebAudio unlock + mic + POST /api/call/start →
-       greeting streams Clause Buffer → Timbre → Jitter Buffer
-       (speechSynthesis fallback) → "LISTENING (Auto-VAD Active)"
-   R2  Auto-VAD on the RAW CLEAN mic analyser (BEFORE noise mixer),
-       dynamic calibration (300ms ambient floor, threshold =
-       max(ambient*2.2, 0.018)), 150ms speech → isUserSpeaking +
-       <30ms auto-barge-in, 650ms silence → end-of-turn → 16kHz
-       Mono 16-bit PCM WAV → /api/call/turn. Mic button = 1-click
-       toggle (click = listen, click again = force end & send).
-   R4  clauses: [{text, audio_base64:"data:audio/wav;base64,…",
-       latency_ms}] decoded + played GAPLESS via the 120ms Jitter
-       Buffer; live 8-box pipeline bar; dark scenario buttons.
-   Kept: full 8-stage architecture — never remove the buffers.
+   BimaVani — frontend/app.js
    ============================================================ */
 "use strict";
 
@@ -33,9 +19,23 @@ const API = {
   eval: "/api/eval",
 };
 
+function escHtml(v) {
+  return String(v ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function makeCallId() {
+  try {
+    if (window.crypto && crypto.randomUUID) return "call-" + crypto.randomUUID().slice(0, 8);
+  } catch {}
+  return "call-" + Math.random().toString(36).slice(2, 10);
+}
+
 /* ---------------- live pipeline strip (bottom band) ---------------- */
-/* The 8 stage nodes live in index.html; JS only lights them up and writes
-   the real measured milliseconds for each hop. */
 const stageEls = [...document.querySelectorAll(".node")]
   .sort((a, b) => Number(a.dataset.stage) - Number(b.dataset.stage));
 
@@ -43,59 +43,120 @@ function litStage(i, ms, opts = {}) {
   const el = stageEls[i];
   if (!el) return;
   el.classList.add("hot");
-  el.querySelector(".node-ms").textContent = (ms != null ? `${Math.round(ms)} ms` : "live");
+  el.querySelector(".node-ms").textContent = ms != null ? `${Math.round(ms)} ms` : "live";
   setTimeout(() => el.classList.remove("hot"), opts.hold ? 1400 : 520);
 }
+
 function decodeStages(pipeline, bargeFlushMs) {
   const s = (pipeline && pipeline.stages_ms) || {};
-  litStage(0, 18);                                    // mic ingest (WAV render ~18ms)
-  if (s.stage_2 !== undefined) litStage(1, s.stage_2); // Prisma STT
-  litStage(2, s.stage_2 > 0 ? 0.4 : 0.2);             // Auto-VAD endpoint decision
-  if (s.stage_4 !== undefined) litStage(3, s.stage_4); // Brain (DeepSeek + tools)
-  litStage(4, s.stage_5 ?? 0.3);                       // clause buffer split
-  litStage(5, s.stage_6 ?? 0);                         // Timbre TTS
-  litStage(6, 120);                                    // jitter prebuffer window
+  litStage(0, s.stage_1 ?? 1.0);
+  if (s.stage_2 !== undefined) litStage(1, s.stage_2);
+  litStage(2, s.stage_3 ?? 0.2);
+  if (s.stage_4 !== undefined) litStage(3, s.stage_4);
+  litStage(4, s.stage_5 ?? 0.2);
+  if (s.stage_6 !== undefined) litStage(5, s.stage_6);
+  litStage(6, s.stage_7 ?? 120);
   if (bargeFlushMs != null) litStage(7, bargeFlushMs, { hold: true });
+  else if (s.stage_8) litStage(7, s.stage_8);
 }
 
 /* ---------------- state ---------------- */
 const S = {
+  callId: makeCallId(),
   callActive: false, callT0: 0, callTimer: null,
-  callEnded: false, phase: "idle", callSeq: 0,              // distinguishes "before first call" from "hung up"
+  callEnded: false, phase: "idle", callSeq: 0,
   recording: false, talkStart: 0,
-  mode: "auto_vad",              // auto_vad default (Round 2)
+  mode: "auto_vad",
   vadSilenceMs: 650,
-  vadSens: 2.2,                  // ambient multiplier → speech threshold
+  vadSens: 2.2,
   playing: false, lastTurnResult: null, awaitingAgentReply: false,
-  currentScenario: null, micDenied: false,
-  pendingBargeTranscript: "", liveStatsTimer: null,
+  micDenied: false,
   pttLatched: false, pttTimer: null,
-  latencyHistory: [],            // [{ttfa, total}] for the last few turns
-  turnSentAt: 0,                 // wall clock at turn submission (true TTFA)
-  lastDispatch: null, lastDraft: null,   // persisted ticket cards across turns
+  latencyHistory: [],
+  turnSentAt: 0,
+  lastLatencyData: null,
+  lastDispatch: null, lastDraft: null,
+  transcriptItems: [],
+  lastBargeNotifiedAt: 0,
 };
+
+const WS = {
+  sock: null,
+  open: false,
+  callId: "",
+  seq: 0,
+  pcmCarry: [],
+  pendingResolve: null,
+  pendingTurnResolve: null,
+  streamComplete: false,
+  fallbackQueue: [],
+};
+
+function setWsPill(txt, live = false) {
+  const el = $("#ws-pill");
+  if (!el) return;
+  el.textContent = txt;
+  el.className = "chip-status" + (live ? " live" : "");
+}
+
+function updateJitterPill(ij, oj) {
+  const el = $("#jitter-pill");
+  if (!el) return;
+  const inEst = ij && ij.jitter_ms_est != null ? `${ij.jitter_ms_est}ms` : "60ms";
+  const reord = ij && ij.out_of_order ? ` · ${ij.out_of_order} reord` : "";
+  const outPre = oj && oj.prebuffer_ms != null ? `${oj.prebuffer_ms}ms` : "120ms";
+  el.textContent = `In-Jitter: ${inEst}${reord} · Out: ${outPre}`;
+}
+
+function grabRecentMicPcmB64(maxMs = 450) {
+  if (!REC.frames.length || !REC.srcRate) return "";
+  const cutoff = performance.now() - maxMs;
+  const slice = REC.frames.filter(f => f.t >= cutoff);
+  const src = slice.length ? slice : REC.frames.slice(-6);
+  const merged = mergeChunks(src.map(f => f.f));
+  if (!merged.length) return "";
+  const downs = downsampleTo16k(merged, REC.srcRate);
+  const i16 = floatTo16PCM(downs);
+  return btoa64(new Uint8Array(i16.buffer, i16.byteOffset, i16.byteLength));
+}
+
+function pushWsAudioChunk(f32) {
+  if (!WS.open || !WS.sock || WS.sock.readyState !== 1) return;
+  if (WS.sock.bufferedAmount > 65536) return; // client-side backpressure guard
+  const downs = downsampleTo16k(f32, REC.srcRate || 48000);
+  const i16 = floatTo16PCM(downs);
+  for (let i = 0; i < i16.length; i++) WS.pcmCarry.push(i16[i]);
+  while (WS.pcmCarry.length >= 320) {
+    const frame = new Int16Array(WS.pcmCarry.splice(0, 320));
+    const pcmB64 = btoa64(new Uint8Array(frame.buffer));
+    try {
+      WS.sock.send(JSON.stringify({
+        type: "audio_frame",
+        seq: WS.seq++,
+        ts_ms: performance.now(),
+        pcm_b64: pcmB64,
+      }));
+    } catch {
+      break;
+    }
+  }
+}
 
 /* ============================================================
    Stage 1: 16kHz Mono 16-bit Linear PCM WAV Recorder + Noise Mixer
-   Architecture: mic source → VAD analyser (RAW, BEFORE mixer)
-                mic source → NoiseMixer worklet → ScriptProcessor
-                (mixing selected noise into the SENT WAV only).
    ============================================================ */
-const REC = { ctx: null, stream: null, proc: null, sink: null, frames: [], srcRate: 48000 };
-
-let NOISE = null; // active noise worklet port
+const REC = { ctx: null, stream: null, proc: null, sink: null, frames: [], srcRate: 48000, chunks: [] };
 
 function floatTo16PCM(f32) {
   const out = new Int16Array(f32.length);
   for (let i = 0; i < f32.length; i++) {
-    let v = Math.max(-1, Math.min(1, f32[i]));
+    const v = Math.max(-1, Math.min(1, f32[i]));
     out[i] = v < 0 ? v * 0x8000 : v * 0x7fff;
   }
   return out;
 }
 
 function interleaveWav(samples, sampleRate) {
-  // Mono 16-bit WAV, genuine 44-byte RIFF header
   const bytes = new Uint8Array(44 + samples.length * 2);
   const dv = new DataView(bytes.buffer);
   const wr = (o, s) => { for (let i = 0; i < s.length; i++) dv.setUint8(o + i, s.charCodeAt(i)); };
@@ -111,44 +172,56 @@ function interleaveWav(samples, sampleRate) {
 }
 
 async function initAudioGraph() {
-  if (REC.ctx) return;
-  REC.ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
-  if (REC.ctx.state === "suspended") await REC.ctx.resume();   // R1 unlock
-  REC.srcRate = REC.ctx.sampleRate;                            // browser may ignore 48k
+  if (REC.ctx && (REC.stream || S.micDenied)) return;
+  if (!REC.ctx) {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    try {
+      REC.ctx = new AudioCtx({ sampleRate: 48000 });
+    } catch {
+      REC.ctx = new AudioCtx();
+    }
+  }
+  if (REC.ctx.state === "suspended") await REC.ctx.resume();
+  REC.srcRate = REC.ctx.sampleRate;
+
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    S.micDenied = true;
+    setCallState("⌨️ No browser mic API — typed & quick-demo mode active");
+    $("#ptt-hint").textContent = "Mic unavailable — type or click a scenario";
+    return;
+  }
+
   try {
     REC.stream = await navigator.mediaDevices.getUserMedia({
       audio: {
-        echoCancellation: true,     // prevents the agent's own voice from re-triggering VAD
-        noiseSuppression: false,    // keep the demo's highway realism in the SENT WAV
+        echoCancellation: true,
+        noiseSuppression: false,
         autoGainControl: false,
         channelCount: 1,
       },
     });
+    S.micDenied = false;
   } catch (e) {
-    // Mic is optional for the demo: keep the call alive in typed mode so the
-    // greeting, the streaming graph and the latency numbers all still run.
     S.micDenied = true;
     REC.stream = null;
     VAD.analyser = null;
     setCallState(`⌨️ Mic blocked (${e.name || e.message}) — typed mode`);
-    $("#ptt-hint").textContent = "Mic unavailable — type below to talk";
+    $("#ptt-hint").textContent = "Mic unavailable — type or click a scenario";
     return;
   }
+
   const src = REC.ctx.createMediaStreamSource(REC.stream);
 
-  /* --- R2: RAW CLEAN mic analyser FIRST (before any noise mixing) --- */
+  // RAW clean mic analyser BEFORE noise mixer
   VAD.analyser = REC.ctx.createAnalyser();
   VAD.analyser.fftSize = 1024;
   VAD.buf = new Float32Array(VAD.analyser.fftSize);
   src.connect(VAD.analyser);
 
-  /* --- Noise mixer (goes into the SENT WAV only, never into VAD) --- */
-  /* ScriptProcessor must exist before we wire the mixer into it. */
   REC.sink = REC.ctx.createScriptProcessor(4096, 1, 1);
   REC.sink.onaudioprocess = (e) => {
     const f32 = e.inputBuffer.getChannelData(0);
     const m = noiseAmount($("#noise-preset").value) * ($("#noise-into-mic").checked ? 1 : 0);
-    // draw + ring-buffer push (per-user speech capture window is chosen later)
     if (S.callActive) {
       REC.frames.push({ t: performance.now(), f: new Float32Array(f32), mixed: m });
       if (REC.frames.length > 220) REC.frames.splice(0, REC.frames.length - 220);
@@ -156,23 +229,22 @@ async function initAudioGraph() {
         REC.chunks = REC.chunks || [];
         REC.chunks.push(new Float32Array(f32));
       }
+      pushWsAudioChunk(f32);
     }
     drawWave(f32);
   };
 
   try {
-    // NOTE: the Blob MUST declare a JS MIME type, otherwise Chrome rejects the
-    // module ("Unable to load a worklet's module") and the whole mic dies.
     const workletSrc = `
       class NoiseMixer extends AudioWorkletProcessor {
         constructor() {
           super();
-          this.mixNoise = 0;        // 0..1 amount
+          this.mixNoise = 0;
           this.keep = false;
           this.ph = 0; this.burst = 0;
           this.port.onmessage = (e) => {
             if (e.data.cmd === "mix") this.mixNoise = e.data.amount;
-            if (e.data.cmd === "mode") this.keep = e.data.keep;  // gsm filter
+            if (e.data.cmd === "mode") this.keep = e.data.keep;
           };
         }
         process(inputs, outputs) {
@@ -182,13 +254,11 @@ async function initAudioGraph() {
           for (let i = 0; i < inp.length; i++) {
             let v = inp[i];
             const t = i / 128 + this.ph;
-            // engine rumble
             let noise = 0.22 * Math.sin(2 * Math.PI * 3 * t) + 0.08 * (Math.random() * 2 - 1);
-            // horn bursts every ~1.8s for 0.35s
             if (this.burst <= 0 && Math.random() < 0.0007) this.burst = 222;
             if (this.burst > 0) { this.burst--; noise += 0.30 * Math.sin(2 * Math.PI * 12 * t) + 0.18 * Math.sin(2 * Math.PI * 19 * t); }
             v = v * (1 - amt * (gsm ? 0.75 : 0.35)) + noise * amt;
-            if (gsm) { // crude telephone roll-off: slow attack smoothing
+            if (gsm) {
               this.prev = (this.prev === undefined ? 0 : this.prev);
               v = this.prev + 0.55 * (v - this.prev);
               this.prev = v;
@@ -201,8 +271,7 @@ async function initAudioGraph() {
       }
       registerProcessor("noise-mixer", NoiseMixer);
     `;
-    const blobUrl = URL.createObjectURL(
-      new Blob([workletSrc], { type: "application/javascript" }));
+    const blobUrl = URL.createObjectURL(new Blob([workletSrc], { type: "application/javascript" }));
     await REC.ctx.audioWorklet.addModule(blobUrl);
     URL.revokeObjectURL(blobUrl);
     REC.proc = new AudioWorkletNode(REC.ctx, "noise-mixer");
@@ -210,17 +279,18 @@ async function initAudioGraph() {
     src.connect(REC.proc);
     REC.proc.connect(REC.sink);
   } catch (err) {
-    // Never lose the microphone because of the noise layer: fall back to raw.
-    console.warn("Noise mixer unavailable — recording the raw mic instead.", err);
+    console.warn("Noise mixer unavailable — recording raw mic instead.", err);
     REC.proc = null;
     src.connect(REC.sink);
   }
-  REC.sink.connect(REC.ctx.destination); // needed for ScriptProcessor to run
+  // Route sink through silent zero-gain node so ScriptProcessor runs without speaker echo
+  const zeroGain = REC.ctx.createGain();
+  zeroGain.gain.value = 0;
+  REC.sink.connect(zeroGain).connect(REC.ctx.destination);
 }
 
 function noiseAmount(preset) {
-  // dB -> linear gain: -10dB ~ .316, -15dB ~ .178
-  return { clean: 0.0, mandi: 0.178, highway: 0.316, gsm: 0.5, gsm_off: 0.0 }[preset] ?? 0;
+  return { clean: 0.0, mandi: 0.178, highway: 0.316, gsm: 0.5 }[preset] ?? 0;
 }
 
 async function updateNoise() {
@@ -234,69 +304,60 @@ async function updateNoise() {
     REC.proc.port.postMessage({ cmd: "mode", keep: preset === "gsm" });
   }
   stopNoiseSpeaker();
-  if (aloud && preset !== "clean") startNoiseSpeaker(preset);
+  if (S.callActive && aloud && preset !== "clean") startNoiseSpeaker(preset);
 }
 
 let noiseGainNode = null;
-async function startNoiseSpeaker(preset) {
-  // Judge audible layer: route a band of noise to the speakers
-  const ctx = REC.ctx || new AudioContext();
+function startNoiseSpeaker(preset) {
+  const ctx = REC.ctx || new (window.AudioContext || window.webkitAudioContext)();
   if (!REC.ctx) REC.ctx = ctx;
   noiseGainNode = ctx.createGain();
+  noiseGainNode.gain.value = 0.35;
   const b = ctx.createBufferSource();
-  const len = 48000 * 2;
-  const buf = ctx.createBuffer(1, len, 48000);
+  const len = ctx.sampleRate * 2;
+  const buf = ctx.createBuffer(1, len, ctx.sampleRate);
   const d = buf.getChannelData(0);
   let burst = 0;
   for (let i = 0; i < len; i++) {
     let v = 0.10 * (Math.random() * 2 - 1);
-    const t = i / 48000;
-    if (preset === "mandi") v += 0.05 * Math.sin(2 * Math.PI * 55 * t) + 0.03 * (Math.random() - .5);
+    const t = i / ctx.sampleRate;
+    if (preset === "mandi") v += 0.05 * Math.sin(2 * Math.PI * 55 * t) + 0.03 * (Math.random() - 0.5);
     if (preset === "highway") {
       if (burst <= 0 && Math.random() < 0.0009) burst = 14000;
       if (burst > 0) { burst--; v += 0.18 * Math.sin(2 * Math.PI * (640 + 30 * Math.sin(2 * Math.PI * 3 * t)) * t); }
       v += 0.09 * Math.sin(2 * Math.PI * 92 * t);
     }
-    if (preset === "gsm") {
-      v = v * 0.6 + (i % 48 < 1 ? 0.2 : 0); // coarse 1kHz square-ish carrier
-    }
-    d[i] = Math.max(-1, Math.min(1, v * (preset === "gsm" ? 4 : 1)));
+    if (preset === "gsm") v = v * 0.6 + (i % 48 < 1 ? 0.2 : 0);
+    d[i] = Math.max(-1, Math.min(1, v * (preset === "gsm" ? 2.5 : 1)));
   }
   b.buffer = buf; b.loop = true;
   b.connect(noiseGainNode).connect(ctx.destination);
   b.start();
   noiseGainNode._src = b;
-  noiseGainNode._preset = preset;
 }
+
 function stopNoiseSpeaker() {
   if (noiseGainNode && noiseGainNode._src) {
     try { noiseGainNode._src.stop(); } catch {}
-    noiseGainNode.disconnect();
+    try { noiseGainNode.disconnect(); } catch {}
     noiseGainNode = null;
   }
 }
 
 /* ============================================================
-   R2: Auto-VAD — raw mic analyser, dynamic calibration,
-       150ms speech → auto-barge-in, 650ms silence → end-of-turn
+   Auto-VAD — raw mic analyser, calibration, barge-in & end-of-turn
    ============================================================ */
 const VAD = {
   analyser: null, buf: null,
-  active: false,            // loop running while call is active
-  awaiting: false,          // a turn is in flight (don't endpoint twice)
+  active: false, awaiting: false,
   calibrating: false, calibrated: false,
-  ambientRms: 0,
-  threshold: 0.018,
+  ambientRms: 0, threshold: 0.018,
   lastFrameAt: 0, lastUiAt: 0,
   speechMs: 0, silMs: 0,
   isUserSpeaking: false,
-  speechStartT: 0,          // timestamp of speech onset (for the WAV slice)
-  preRollMs: 250,           // keep a little pre-speech pad
+  speechStartT: 0, preRollMs: 250,
 };
 
-/* Sample the RAW mic for 300ms while NOTHING is playing, then derive the
-   speech threshold. This must run BEFORE the greeting, otherwise the
-   agent's own speaker audio inflates the ambient floor. */
 async function calibrateAmbient(ms = 300) {
   if (!VAD.analyser) return;
   VAD.calibrating = true;
@@ -308,14 +369,14 @@ async function calibrateAmbient(ms = 300) {
     for (let i = 0; i < VAD.buf.length; i++) s += VAD.buf[i] * VAD.buf[i];
     sum += Math.sqrt(s / VAD.buf.length);
     n++;
-    await new Promise(r => setTimeout(r, 20));
+    await sleep(20);
   }
   VAD.ambientRms = sum / Math.max(1, n);
   VAD.threshold = Math.max(VAD.ambientRms * (S.vadSens || 2.2), 0.018);
   VAD.calibrating = false;
   VAD.calibrated = true;
   const el = $("#vad-live");
-  if (el) el.textContent = `Ambient ${VAD.ambientRms.toFixed(4)} → speech threshold ${VAD.threshold.toFixed(3)} (raw mic)`;
+  if (el) el.textContent = `Ambient ${VAD.ambientRms.toFixed(4)} → thr ${VAD.threshold.toFixed(3)} (raw mic)`;
 }
 
 function startVad() {
@@ -324,7 +385,7 @@ function startVad() {
   VAD.lastFrameAt = 0;
   VAD.speechMs = 0; VAD.silMs = 0; VAD.isUserSpeaking = false;
   setCallState(VAD.calibrated
-    ? `🎧 LISTENING (Auto-VAD Active) — boliye, ${S.vadSilenceMs}ms rukne par khud bhej doonga`
+    ? `🎧 LISTENING (Auto-VAD Active) — boliye, ${S.vadSilenceMs}ms rukne par send hoga`
     : "🎧 LISTENING (Auto-VAD Active) — calibrating mic…");
   updateMicBtn();
 }
@@ -332,31 +393,32 @@ function startVad() {
 function stopVad() {
   VAD.active = false;
   VAD.isUserSpeaking = false;
-  setMicIdle();
+  updateMicBtn();
 }
 
 function setCallState(txt) {
   const el = $("#call-state");
   if (el) el.textContent = txt;
-  // The big headline mirrors what the agent is doing (see updateHero).
-  if (typeof updateHero === "function") updateHero(txt);
+  updateHero(txt);
 }
 
 function updateMicBtn() {
   const b = $("#btn-ptt");
   if (!b) return;
-  b.classList.toggle("talking", !!VAD.isUserSpeaking);
-  b.classList.toggle("listening", !!VAD.active && !VAD.isUserSpeaking);
+  const activeSpeak = !!VAD.isUserSpeaking || !!S.recording;
+  b.classList.toggle("talking", activeSpeak);
+  b.classList.toggle("listening", (!!VAD.active || (S.callActive && S.mode === "push_to_talk")) && !activeSpeak);
   b.classList.toggle("thinking", !!S.awaitingAgentReply);
-  $("#ptt-hint").textContent = VAD.isUserSpeaking
-    ? "I'm hearing you…"
-    : (S.mode === "auto_vad"
-        ? "Listening — speak naturally, I'll answer when you pause"
-        : "Hold to talk · or tap once to latch");
+  const hint = $("#ptt-hint");
+  if (!hint) return;
+  if (!S.callActive) hint.textContent = "Press Call to start";
+  else if (S.micDenied) hint.textContent = "Mic unavailable — type or click a scenario";
+  else if (S.recording) hint.textContent = S.pttLatched ? "Recording… click mic again to send" : "Recording… release to send";
+  else if (VAD.isUserSpeaking) hint.textContent = "I'm hearing you…";
+  else if (S.mode === "auto_vad") hint.textContent = "Listening — speak naturally, pause to send";
+  else hint.textContent = "Hold to talk · or tap once to latch";
 }
-function setMicIdle() { updateMicBtn(); }
 
-/* one rAF tick of the Auto-VAD engine */
 function vadTick() {
   requestAnimationFrame(vadTick);
   if (!VAD.active || !VAD.analyser) return;
@@ -369,13 +431,13 @@ function vadTick() {
   for (let i = 0; i < VAD.buf.length; i++) sum += VAD.buf[i] * VAD.buf[i];
   const rms = Math.sqrt(sum / VAD.buf.length);
 
-  // live debug line + meter (helps judge/fix mic gain fast)
   if (now - VAD.lastUiAt > 120) {
     VAD.lastUiAt = now;
     const el = $("#vad-live");
-    if (el) el.textContent =
-      `VAD ${rms.toFixed(4)} / thr ${VAD.threshold.toFixed(3)} · ` +
-      (VAD.isUserSpeaking ? "SPEECH" : "silence") + " · raw mic";
+    if (el) {
+      el.textContent = `VAD ${rms.toFixed(4)} / thr ${VAD.threshold.toFixed(3)} · `
+        + (VAD.isUserSpeaking ? "SPEECH" : "silence");
+    }
     const METER_MAX = 0.30;
     const bar = $("#vad-bar");
     if (bar) {
@@ -386,14 +448,11 @@ function vadTick() {
     if (mark) mark.style.left = Math.min(100, (VAD.threshold / METER_MAX) * 100).toFixed(1) + "%";
   }
 
-  // calibration fallback (if startVad ran before calibration completed)
   if (!VAD.calibrated) {
     if (!VAD.calibrating) calibrateAmbient();
     return;
   }
 
-  // While the agent speaks we ONLY look for barge-in — never endpoint the
-  // driver's own silence, and require a higher gate to ignore speaker echo.
   const playing = S.playing;
   const gate = playing ? VAD.threshold * 2.5 : VAD.threshold;
 
@@ -404,13 +463,15 @@ function vadTick() {
       VAD.isUserSpeaking = true;
       VAD.speechStartT = now - VAD.speechMs - VAD.preRollMs;
       updateMicBtn();
-      if (S.playing) {
-        // auto-barge-in: FLUSH agent audio in <30ms and listen
+      if (S.playing || S.awaitingAgentReply) {
         const t0 = performance.now();
+        const spokenSnapshot = $("#agent-reply")?.textContent || "";
+        const pcmSnap = grabRecentMicPcmB64(450);
         browserStopAudio();
-        beginUserTurnAfterBargeIn();          // capture the user's interruption
+        beginUserTurnAfterBargeIn(true);
         litStage(7, performance.now() - t0, { hold: true });
-        setCallState("⚡ BARGE-IN — main sun rahi hoon, ji aap boliye.");
+        setCallState("⚡ BARGE-IN — main sun rahi hoon, boliye.");
+        notifyAutoVadBargeIn(spokenSnapshot, pcmSnap, "auto_vad_mic");
       }
     }
   } else {
@@ -428,15 +489,13 @@ function vadTick() {
 }
 requestAnimationFrame(vadTick);
 
-/* Slice the ring buffer since speech onset (noise preset applied by mixer
-   already — frames were recorded THROUGH the noise worklet), → 16kHz WAV */
 function buildUserWavNow() {
   const cut = VAD.speechStartT - 200;
   const idx = REC.frames.findIndex(f => f.t >= cut);
-  const slice = (idx >= 0 ? REC.frames.slice(idx) : REC.frames.slice(-20));
+  const slice = idx >= 0 ? REC.frames.slice(idx) : REC.frames.slice(-20);
   if (!slice.length) return null;
   const merged = mergeChunks(slice.map(f => f.f));
-  if (merged.length < REC.srcRate * 0.25) return null;    // <250ms = not speech
+  if (merged.length < REC.srcRate * 0.25) return null;
   const downs = downsampleTo16k(merged, REC.srcRate);
   return interleaveWav(floatTo16PCM(downs), 16000);
 }
@@ -444,18 +503,30 @@ function buildUserWavNow() {
 async function endTurnAuto() {
   if (!S.callActive || VAD.awaiting) return;
   const wav = buildUserWavNow();
-  if (!wav) { setCallState("🎧 LISTENING (Auto-VAD Active) — awaaz nahi mili, dobara boliye."); return; }
+  if (!wav) {
+    setCallState("🎧 LISTENING (Auto-VAD Active) — awaaz nahi mili, dobara boliye.");
+    return;
+  }
   setCallState("⏳ Processing turn… (Prisma STT → Brain → Timbre)");
   litStage(0, null, { hold: true });
   await sendTurn(btoa64(wav));
 }
 
-/* Mic button (Auto-VAD mode was routed via click handler; PTT uses hold) */
+function promptDialFirst() {
+  setCallState("Press 📞 Call first to start a helpline session");
+  const btn = $("#btn-dial");
+  if (btn) {
+    btn.classList.remove("pulse");
+    void btn.offsetWidth;
+    btn.classList.add("pulse");
+  }
+}
+
 async function micToggle() {
-  if (!S.callActive) { alert("Press 📞 Call 1-800-BIMA-VANI first."); return; }
+  if (!S.callActive) { promptDialFirst(); return; }
   if (S.micDenied) {
-    setCallState("⌨️ Mic blocked — type your turn in the box below");
-    const box = $("#type-say"); if (box) { box.focus(); }
+    setCallState("⌨️ Mic blocked — type your turn or click a scenario chip");
+    $("#type-say")?.focus();
     return;
   }
   if (!REC.ctx) await initAudioGraph();
@@ -463,9 +534,17 @@ async function micToggle() {
     VAD.isUserSpeaking = true;
     VAD.speechStartT = performance.now() - VAD.preRollMs;
     VAD.speechMs = 0; VAD.silMs = 0;
-    if (S.playing) { const t0 = performance.now(); browserStopAudio(); beginUserTurnAfterBargeIn(); litStage(7, performance.now() - t0, { hold: true }); }
+    if (S.playing || S.awaitingAgentReply) {
+      const t0 = performance.now();
+      const spokenSnapshot = $("#agent-reply")?.textContent || "";
+      const pcmSnap = grabRecentMicPcmB64(450);
+      browserStopAudio();
+      beginUserTurnAfterBargeIn(true);
+      litStage(7, performance.now() - t0, { hold: true });
+      notifyAutoVadBargeIn(spokenSnapshot, pcmSnap, "mic_toggle");
+    }
     updateMicBtn();
-    setCallState("🔴 Mic locked ON — boliye, phir se click kijiye to send hoga.");
+    setCallState("🔴 Mic locked ON — boliye, dubara click kijiye to send hoga.");
   } else {
     VAD.isUserSpeaking = false;
     VAD.silMs = 0; VAD.speechMs = 0;
@@ -473,12 +552,7 @@ async function micToggle() {
   }
 }
 
-/* ---------------- push-to-talk recorder (test mode) ----------------
-   Two ways to use it, both reliable:
-     • HOLD the mic ≥0.6s, release → sends immediately (classic PTT)
-     • CLICK quickly → recording latches ON; click again → sends
-   Auto-VAD is switched OFF in this mode, so it can never auto-endpoint
-   in the middle of your sentence. */
+/* ---------------- Push-to-talk recorder ---------------- */
 function pttSetStatus(txt) {
   const el = $("#ptt-live");
   if (el) el.textContent = txt;
@@ -487,54 +561,49 @@ function pttSetStatus(txt) {
 function pttTick() {
   if (!S.recording) return;
   const ms = performance.now() - S.talkStart;
-  // peak of the last recorded chunk → proves audio is really captured
   const last = (REC.chunks || [])[REC.chunks.length - 1];
   let peak = 0;
   if (last) for (let i = 0; i < last.length; i++) {
     const a = Math.abs(last[i]);
     if (a > peak) peak = a;
   }
-  const bars = "█".repeat(Math.min(20, Math.round(peak * 40)));
-  pttSetStatus(`🔴 REC ${(ms / 1000).toFixed(1)}s · level ${peak.toFixed(3)} ${bars || "·"}` +
-               (S.pttLatched ? " · click mic again to send" : " · release to send"));
+  const bars = "█".repeat(Math.min(16, Math.round(peak * 36)));
+  pttSetStatus(`🔴 ${(ms / 1000).toFixed(1)}s · ${bars || "·"}`);
   const timer = $("#ptt-timer");
   if (timer) timer.textContent = (ms / 1000).toFixed(1) + "s";
   S.pttTimer = setTimeout(pttTick, 120);
 }
 
 async function startTalk(latched = false) {
-  if (!S.callActive) { alert("Press 📞 Call 1-800-BIMA-VANI first."); return; }
-  if (S.micDenied) { setCallState("⌨️ Mic blocked — type your turn below"); $("#type-say")?.focus(); return; }
+  if (!S.callActive) { promptDialFirst(); return; }
+  if (S.micDenied) { setCallState("⌨️ Mic blocked — type below"); $("#type-say")?.focus(); return; }
   if (S.recording || S.awaitingAgentReply) return;
   PTT._latchPending = false;
   try {
     if (!REC.ctx) await initAudioGraph();
-    if (REC.ctx.state === "suspended") await REC.ctx.resume();
+    if (REC.ctx && REC.ctx.state === "suspended") await REC.ctx.resume();
     await updateNoise();
   } catch (e) {
     setCallState(`⚠️ ${e.message || e.name} — allow the microphone and try again.`);
     return;
   }
-  // barge-in: if the agent is still talking, cut it off
-  if (S.playing) { const t0 = performance.now(); browserStopAudio(); beginUserTurnAfterBargeIn(); litStage(7, performance.now() - t0, { hold: true }); }
-  // PTT owns the turn: Auto-VAD must not endpoint for us
+  if (S.playing) {
+    const t0 = performance.now();
+    browserStopAudio();
+    litStage(7, performance.now() - t0, { hold: true });
+  }
   stopVad();
 
   S.recording = true; S.talkStart = performance.now(); S.pttLatched = latched;
   REC.chunks = [];
-  $("#btn-ptt").classList.add("talking");
-  $("#btn-ptt").textContent = "🔴";
-  $("#ptt-hint").textContent = latched
-    ? "🔴 Recording… click the mic again to send"
-    : "🔴 Recording… release to send";
-  setCallState("🔴 PTT RECORDING — boliye, phir release/click kijiye");
-  litStage(0, null, { hold: true });
-  if (PTT._latchPending) {          // tap finished while the graph was loading
+  if (PTT._latchPending) {
     PTT._latchPending = false;
     S.pttLatched = true;
-    $("#ptt-hint").textContent = "🔴 Recording… click the mic again to send";
   }
+  setCallState("🔴 PTT RECORDING — boliye, phir release/click kijiye");
+  litStage(0, null, { hold: true });
   syncPttControls();
+  updateMicBtn();
   pttTick();
 }
 
@@ -543,12 +612,10 @@ function cancelTalk() {
   S.recording = false; S.pttLatched = false;
   clearTimeout(S.pttTimer);
   REC.chunks = [];
-  $("#btn-ptt").classList.remove("talking");
-  $("#btn-ptt").textContent = "🎙️";
-  $("#ptt-hint").textContent = "HOLD to talk · or click to latch on/off";
-  pttSetStatus("PTT: cancelled (nothing sent)");
-  setCallState("🤖 Agent done — HOLD the mic to reply (Push-to-Talk)");
+  pttSetStatus("PTT: cancelled");
+  setCallState("🎙️ PUSH-TO-TALK — hold the orb to reply");
   syncPttControls();
+  updateMicBtn();
 }
 
 async function endTalk() {
@@ -558,19 +625,17 @@ async function endTalk() {
   const merged = mergeChunks((REC.chunks || []).map(f => f.f || f));
   const recMs = performance.now() - S.talkStart;
   REC.chunks = [];
-  $("#btn-ptt").classList.remove("talking");
-  $("#btn-ptt").textContent = "🎙️";
-  $("#ptt-hint").textContent = "HOLD to talk · or click to latch on/off";
+  updateMicBtn();
 
   if (recMs < 350 || merged.length < (REC.srcRate || 48000) * 0.3) {
-    pttSetStatus(`PTT: too short (${(recMs / 1000).toFixed(1)}s) — hold ~1s and speak`);
-    setCallState("🤖 Agent done — HOLD the mic to reply (Push-to-Talk)");
+    pttSetStatus(`PTT: too short (${(recMs / 1000).toFixed(1)}s)`);
+    setCallState("🎙️ PUSH-TO-TALK — hold ~1s and speak");
     syncPttControls();
     return;
   }
   const downs = downsampleTo16k(merged, REC.srcRate || 48000);
   const wav = interleaveWav(floatTo16PCM(downs), 16000);
-  pttSetStatus(`PTT: sent ${(wav.length / 1024).toFixed(1)} KB · ${(recMs / 1000).toFixed(1)}s @16kHz mono`);
+  pttSetStatus(`PTT: ${(wav.length / 1024).toFixed(1)} KB · ${(recMs / 1000).toFixed(1)}s`);
   setCallState("⏳ Processing turn… (Prisma STT → Brain → Timbre)");
   syncPttControls();
   litStage(0, null, { hold: true });
@@ -583,8 +648,8 @@ function mergeChunks(chunks) {
   for (const c of chunks) { out.set(c, o); o += c.length; }
   return out;
 }
+
 function downsampleTo16k(f32, srcRate) {
-  // proper linear-interpolation resample to exactly 16,000 Hz
   if (!srcRate || srcRate === 16000) return f32;
   const ratio = srcRate / 16000;
   const outLen = Math.floor(f32.length / ratio);
@@ -598,16 +663,15 @@ function downsampleTo16k(f32, srcRate) {
   }
   return out;
 }
+
 function btoa64(bytes) {
   let bin = "";
   const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-  const n = u8.length;
-  for (let i = 0; i < n; i += 0x8000)
+  for (let i = 0; i < u8.length; i += 0x8000)
     bin += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
   return btoa(bin);
 }
 
-/* waveform canvas */
 function drawWave(f32) {
   const c = $("#waveform"); if (!c) return;
   const ctx = c.getContext("2d");
@@ -624,10 +688,8 @@ function drawWave(f32) {
 
 /* ============================================================
    Stage 7: Jitter Buffer (120ms prebuffer + gapless scheduling)
-   Accepts the R4 contract: audio_base64 = "data:audio/wav;base64,…"
-   (legacy plain base64 also supported).speechSynthesis fallback.
    ============================================================ */
-const JITTER = { ctx: null, queue: [], scheduledAt: 0, prebufferMs: 120, token: 0 };
+const JITTER = { ctx: null, queue: [], prebufferMs: 120, token: 0 };
 
 function stripDataUri(b64) {
   if (b64.startsWith("data:")) {
@@ -639,7 +701,7 @@ function stripDataUri(b64) {
 
 function speakFallback(text) {
   try {
-    if (!window.speechSynthesis) return false;
+    if (!window.speechSynthesis || !text) return false;
     const u = new SpeechSynthesisUtterance(text);
     u.lang = "hi-IN"; u.rate = 0.98; u.pitch = 1.05;
     speechSynthesis.speak(u);
@@ -648,7 +710,6 @@ function speakFallback(text) {
 }
 
 function speakFallbackAsync(text) {
-  // Resolves when the browser finishes speaking (or a safe timeout).
   return new Promise((resolve) => {
     try {
       if (!window.speechSynthesis || !text) return resolve(false);
@@ -657,36 +718,25 @@ function speakFallbackAsync(text) {
       u.onend = () => resolve(true);
       u.onerror = () => resolve(false);
       speechSynthesis.speak(u);
-      setTimeout(() => resolve(true), Math.max(1800, text.length * 90));
+      setTimeout(() => resolve(true), Math.max(1800, text.length * 85));
     } catch { resolve(false); }
   });
 }
 
 async function playClausesFromPayload(payloadClauses, fallbackText) {
-  const my = ++JITTER.token;              // barge-in increments → cancels this wait
-  const ctx = S.playCtx || new AudioContext();
+  const my = ++JITTER.token;
+  const ctx = S.playCtx || new (window.AudioContext || window.webkitAudioContext)();
   S.playCtx = ctx;
   if (ctx.state === "suspended") { try { await ctx.resume(); } catch {} }
-  const now = ctx.currentTime;
-  let startAt = now + JITTER.prebufferMs / 1000;   // 120ms prebuffer
-  JITTER.queue = [];
-  let decodedAny = false;
-  for (const cl of payloadClauses) {
-    if (!cl.audio_base64) continue;
-    try {
-      const bin = Uint8Array.from(atob(stripDataUri(cl.audio_base64)), c => c.charCodeAt(0));
-      const buf = await ctx.decodeAudioData(bin.buffer.slice(0));
-      JITTER.queue.push(buf);
-      decodedAny = true;
-    } catch { /* try next clause; final fallback below */ }
-  }
-  if (my !== JITTER.token) return;        // barge-in happened during decode
-  // Credit-Shield fallback audio is only a tone — speak the WORDS with the
-  // browser TTS instead so the agent is never "beeping" at the driver.
+
   const allFallback = payloadClauses.length > 0 && payloadClauses.every(c => c.fallback);
   if (allFallback) {
     S.playing = true;
-    $("#btn-barge-in").disabled = false;
+    maybeEnableBarge();
+    const firstMs = S.turnSentAt ? Math.max(1, performance.now() - S.turnSentAt) : 120;
+    if (S.lastTurnResult) S.lastTurnResult.ttfa_ms = firstMs;
+    if (S.lastLatencyData) { S.lastLatencyData.ttfa_ms = firstMs; renderLatency(S.lastLatencyData); }
+    litStage(6, 120);
     const spoken = payloadClauses.map(c => c.text).filter(Boolean).join(" ");
     try {
       await speakFallbackAsync(spoken || fallbackText || "");
@@ -696,39 +746,59 @@ async function playClausesFromPayload(payloadClauses, fallbackText) {
     }
     return;
   }
+
+  const now = ctx.currentTime;
+  let startAt = now + JITTER.prebufferMs / 1000;
+  JITTER.queue = [];
+  let decodedAny = false;
+  for (const cl of payloadClauses) {
+    if (!cl.audio_base64) continue;
+    try {
+      const bin = Uint8Array.from(atob(stripDataUri(cl.audio_base64)), c => c.charCodeAt(0));
+      const buf = await ctx.decodeAudioData(bin.buffer.slice(0));
+      JITTER.queue.push(buf);
+      decodedAny = true;
+    } catch {}
+  }
+  if (my !== JITTER.token) return;
+
   if (!decodedAny) {
-    // R1: never silent — window.speechSynthesis fallback
-    speakFallback(fallbackText || (payloadClauses.find(c => c.text) || {}).text || "");
-    await new Promise(r => setTimeout(r, 1200));
-    S.playing = false;
+    S.playing = true;
+    maybeEnableBarge();
+    const firstMs = S.turnSentAt ? Math.max(1, performance.now() - S.turnSentAt) : 120;
+    if (S.lastTurnResult) S.lastTurnResult.ttfa_ms = firstMs;
+    if (S.lastLatencyData) { S.lastLatencyData.ttfa_ms = firstMs; renderLatency(S.lastLatencyData); }
+    try {
+      await speakFallbackAsync(fallbackText || (payloadClauses.find(c => c.text) || {}).text || "");
+    } finally {
+      S.playing = false;
+      if (my === JITTER.token) maybeEnableBarge();
+    }
     return;
   }
+
   S.playing = true;
-  $("#btn-barge-in").disabled = false;
+  maybeEnableBarge();
   let firstMs = null;
   for (const buf of JITTER.queue) {
     const src = ctx.createBufferSource();
     src.buffer = buf;
     src.connect(ctx.destination);
-    src.start(startAt);                 // gapless: scheduled back-to-back
+    src.start(startAt);
     if (firstMs === null) {
-      // True TTFA = wall-clock from turn submission → first audible sample,
-      // so it includes STT + Brain + TTS + network + prebuffer.
       const firstAudioAt = performance.now() + (startAt - now) * 1000;
-      firstMs = S.turnSentAt
-        ? firstAudioAt - S.turnSentAt
-        : (startAt - now) * 1000;
+      firstMs = S.turnSentAt ? firstAudioAt - S.turnSentAt : (startAt - now) * 1000;
     }
-    startAt += buf.duration;            // Clause 2 right behind Clause 1
+    startAt += buf.duration;
   }
   litStage(6, 120);
   const total = JITTER.queue.reduce((a, b) => a + b.duration, 0);
   if (S.lastTurnResult) S.lastTurnResult.ttfa_ms = firstMs;
   if (S.lastLatencyData) {
     S.lastLatencyData.ttfa_ms = firstMs;
-    renderLatency(S.lastLatencyData);       // TTFA is only known once audio is scheduled
+    renderLatency(S.lastLatencyData);
   }
-  // await REAL end of playback (or barge-in cancellation)
+
   try {
     await new Promise((resolve) => {
       const t0 = performance.now();
@@ -739,16 +809,102 @@ async function playClausesFromPayload(payloadClauses, fallbackText) {
       })();
     });
   } finally {
-    S.playing = false;           // never leave playback "stuck on" after a barge-in/token change
+    S.playing = false;
     if (my === JITTER.token) maybeEnableBarge();
   }
 }
 
 /* ============================================================
-   Stage 8: Barge-In — <20ms browser kill, then backend flush
+   Stage 7 & 8: Streaming Output Jitter Buffer + Barge-In + WS
    ============================================================ */
+JITTER.streamEndAt = 0;
+JITTER.streamToken = 0;
+JITTER.streamPromises = [];
+
+async function streamClauseToJitter(clause) {
+  if (!clause) return;
+  const my = JITTER.streamToken || JITTER.token;
+  if (clause.fallback) {
+    WS.fallbackQueue.push(clause.text || "");
+    S.playing = true;
+    maybeEnableBarge();
+    const firstMs = S.turnSentAt ? Math.max(1, performance.now() - S.turnSentAt) : 120;
+    if (S.lastLatencyData && S.lastLatencyData.ttfa_ms == null) {
+      S.lastLatencyData.ttfa_ms = firstMs;
+      renderLatency(S.lastLatencyData);
+    }
+    litStage(6, 120);
+    return;
+  }
+
+  const ctx = S.playCtx || new (window.AudioContext || window.webkitAudioContext)();
+  S.playCtx = ctx;
+  if (ctx.state === "suspended") { try { await ctx.resume(); } catch {} }
+  if (!clause.audio_base64) return;
+  let buf;
+  try {
+    const bin = Uint8Array.from(atob(stripDataUri(clause.audio_base64)), c => c.charCodeAt(0));
+    buf = await ctx.decodeAudioData(bin.buffer.slice(0));
+  } catch { return; }
+  if (my !== JITTER.token) return;
+
+  const now = ctx.currentTime;
+  const startAt = JITTER.streamEndAt > now ? JITTER.streamEndAt : (now + JITTER.prebufferMs / 1000);
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  src.connect(ctx.destination);
+  src.start(startAt);
+  JITTER.streamEndAt = startAt + buf.duration;
+
+  if (!S.playing) {
+    S.playing = true;
+    maybeEnableBarge();
+    const firstAudioAt = performance.now() + Math.max(0, startAt - now) * 1000;
+    const firstMs = S.turnSentAt ? firstAudioAt - S.turnSentAt : 120;
+    if (S.lastLatencyData) {
+      S.lastLatencyData.ttfa_ms = firstMs;
+      renderLatency(S.lastLatencyData);
+    }
+    litStage(6, 120);
+  }
+
+  const doneP = new Promise((resolve) => {
+    const endWall = performance.now() + Math.max(0.05, (JITTER.streamEndAt - now) + 0.08) * 1000;
+    (function wait() {
+      if (my !== JITTER.token || performance.now() >= endWall) return resolve();
+      setTimeout(wait, 40);
+    })();
+  });
+  JITTER.streamPromises.push(doneP);
+}
+
+async function waitForStreamingPlayback(fallbackText) {
+  const my = JITTER.streamToken;
+  if (WS.fallbackQueue.length) {
+    const text = WS.fallbackQueue.join(" ").trim() || fallbackText || "";
+    WS.fallbackQueue = [];
+    try {
+      await speakFallbackAsync(text);
+    } finally {
+      if (my === JITTER.token) { S.playing = false; maybeEnableBarge(); }
+    }
+    return;
+  }
+  if (JITTER.streamPromises.length) {
+    try {
+      await Promise.all(JITTER.streamPromises);
+    } finally {
+      JITTER.streamPromises = [];
+      if (my === JITTER.token) { S.playing = false; maybeEnableBarge(); }
+    }
+  }
+}
+
 function browserStopAudio() {
-  JITTER.token++;                        // cancels any pending playback await
+  JITTER.token++;
+  JITTER.streamEndAt = 0;
+  JITTER.streamPromises = [];
+  WS.fallbackQueue = [];
   try { window.speechSynthesis?.cancel?.(); } catch {}
   if (S.playCtx) {
     S.playCtx.close().catch(() => {});
@@ -760,92 +916,362 @@ function browserStopAudio() {
   return performance.now();
 }
 
-/* After the agent's audio is killed by a barge-in, immediately mark the user
-   as speaking and unblock endTurnAuto so their interruption is captured and
-   sent on the next pause — instead of being swallowed by VAD.awaiting=true. */
-function beginUserTurnAfterBargeIn() {
-  VAD.awaiting = false;                       // unblock endTurnAuto()
-  VAD.isUserSpeaking = true;
+function beginUserTurnAfterBargeIn(userTalking = false) {
+  VAD.awaiting = false;
+  VAD.isUserSpeaking = !!(userTalking && S.mode === "auto_vad" && !S.micDenied);
   VAD.speechStartT = performance.now() - VAD.preRollMs;
   VAD.speechMs = 0; VAD.silMs = 0;
   updateMicBtn();
-  startVad();                                 // VAD actively listening again
+  if (S.mode === "auto_vad" && !S.micDenied && S.callActive) startVad();
 }
 
-/* Barge-in: stop the browser audio instantly, then flush the backend queues.
-   Whatever the driver was typing (or had typed) is sent as the interruption. */
-async function triggerBargeIn() {
+function applyInterruptedContext(ctx) {
+  if (!ctx) return;
+  let updated = false;
+  for (let i = S.transcriptItems.length - 1; i >= 0; i--) {
+    if (S.transcriptItems[i].role === "agent") {
+      if (!S.transcriptItems[i].interrupted) {
+        S.transcriptItems[i].interrupted = true;
+        S.transcriptItems[i].badge = "🤖 BimaVani";
+        updated = true;
+      }
+      break;
+    }
+  }
+  if (ctx.mic_dump) {
+    pushTranscript("interrupted", ctx.mic_dump, "⚡ Mic Dump", true);
+  } else if (updated) {
+    renderTranscriptLog();
+  }
+}
+
+async function notifyAutoVadBargeIn(spokenText = "", pcmB64 = "", source = "auto_vad_mic") {
+  const now = performance.now();
+  if (now - S.lastBargeNotifiedAt < 250) return;
+  S.lastBargeNotifiedAt = now;
+  const payload = {
+    call_id: S.callId,
+    transcript: "",
+    spoken_text: spokenText,
+    pcm_b64: pcmB64,
+    source,
+    update_cards: false,
+  };
+  try {
+    if (WS.open && WS.sock && WS.sock.readyState === 1) {
+      WS.sock.send(JSON.stringify({ type: "barge_in", ...payload }));
+    } else {
+      const res = await fetch(API.bargeIn, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (data.flush_latency_ms != null) litStage(7, data.flush_latency_ms, { hold: true });
+      applyInterruptedContext(data.interrupted_context);
+    }
+  } catch {}
+}
+
+function wsClose() {
+  if (WS.sock) {
+    try { WS.sock.close(); } catch {}
+  }
+  WS.sock = null;
+  WS.open = false;
+  WS.callId = "";
+  WS.pcmCarry = [];
+  WS.pendingResolve = null;
+  WS.pendingTurnResolve = null;
+  setWsPill("HTTP mode", false);
+}
+
+function wsConnect(callId) {
+  wsClose();
+  return new Promise((resolve) => {
+    if (!window.WebSocket) { setWsPill("HTTP fallback"); return resolve(false); }
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    const url = `${proto}//${location.host}/ws/call/${encodeURIComponent(callId)}`;
+    let settled = false;
+    const done = (ok) => {
+      if (settled) return;
+      settled = true;
+      resolve(ok);
+    };
+    const timer = setTimeout(() => done(false), 1200);
+    try {
+      const sock = new WebSocket(url);
+      WS.sock = sock;
+      WS.callId = callId;
+      sock.onopen = () => {
+        WS.open = true;
+        setWsPill("⚡ WS Streaming", true);
+        sock.send(JSON.stringify({
+          type: "config",
+          endpoint_mode: S.mode,
+          vad_silence_ms: S.vadSilenceMs,
+          server_auto_endpoint: false,
+        }));
+        clearTimeout(timer);
+        done(true);
+      };
+      sock.onerror = () => {
+        WS.open = false;
+        setWsPill("HTTP fallback", false);
+        clearTimeout(timer);
+        done(false);
+      };
+      sock.onclose = () => {
+        WS.open = false;
+        if (S.callActive) setWsPill("HTTP fallback", false);
+        if (WS.pendingTurnResolve) {
+          const r = WS.pendingTurnResolve;
+          WS.pendingTurnResolve = null;
+          r(null);
+        }
+      };
+      sock.onmessage = (evt) => {
+        let msg;
+        try { msg = JSON.parse(evt.data); } catch { return; }
+        handleWsMessage(msg);
+      };
+    } catch {
+      clearTimeout(timer);
+      setWsPill("HTTP fallback", false);
+      done(false);
+    }
+  });
+}
+
+async function handleWsMessage(msg) {
+  if (!msg || !msg.type) return;
+  if (msg.type === "ready") {
+    if (msg.sessions) {
+      const sp = $("#session-pill");
+      if (sp) sp.textContent = `Sessions: ${msg.sessions.active_sessions}/${msg.sessions.max_sessions}`;
+    }
+    return;
+  }
+  if (msg.type === "vad_state") {
+    if (msg.input_jitter) updateJitterPill(msg.input_jitter, null);
+    return;
+  }
+  if (msg.type === "barge_in_ack") {
+    litStage(7, msg.flush_latency_ms, { hold: true });
+    applyInterruptedContext(msg.interrupted_context);
+    if (msg.cards && msg.cards.reply_text) {
+      renderTurn({
+        _skipTranscriptUser: true,
+        transcript: msg.interrupted_context?.raw_transcript || "",
+        reply_text: msg.cards.reply_text,
+        entities: msg.cards.entities,
+        tools_invoked: msg.cards.tools_invoked,
+        ticket_status: msg.cards.ticket_status,
+        stage: msg.cards.stage,
+        clauses: msg.cards.clauses,
+      });
+      if (msg.cards.clauses && msg.cards.clauses.length) {
+        await playClausesFromPayload(msg.cards.clauses, msg.cards.reply_text);
+      }
+      await agentDoneReplying();
+    }
+    return;
+  }
+  if (msg.type === "endpoint_detected") {
+    if (!VAD.awaiting && !S.awaitingAgentReply) {
+      VAD.awaiting = true;
+      S.awaitingAgentReply = true;
+      S.turnSentAt = performance.now();
+      maybeEnableBarge();
+      setCallState("⏳ Processing turn… (WS Streaming)");
+    }
+    return;
+  }
+  if (msg.type === "stt_result") {
+    const tr = $("#stt-transcript");
+    if (tr) tr.textContent = (msg.transcript || "").trim() || "(no words recognised)";
+    if (msg.stt && msg.stt.stt_latency_ms != null) litStage(1, msg.stt.stt_latency_ms);
+    return;
+  }
+  if (msg.type === "brain_result") {
+    JITTER.streamToken = ++JITTER.token;
+    JITTER.streamEndAt = 0;
+    JITTER.streamPromises = [];
+    WS.fallbackQueue = [];
+    WS.streamComplete = false;
+    S.lastTurnResult = msg;
+    renderTurn({
+      _isGreeting: !!msg.is_greeting,
+      transcript: msg.transcript || "",
+      reply_text: msg.reply_text || "",
+      entities: msg.entities,
+      tools_invoked: msg.tools_invoked,
+      ticket_status: msg.ticket_status,
+      stage: msg.stage,
+      stt_empty: msg.stt_empty,
+    });
+    if (msg.stt_empty) {
+      setCallState(msg.hint ? `⚠️ STT empty — ${msg.hint}` : "🎧 Kuch sunai nahi diya — dobara boliye.");
+    }
+    return;
+  }
+  if (msg.type === "tts_clause") {
+    await streamClauseToJitter(msg.clause);
+    return;
+  }
+  if (msg.type === "turn_complete") {
+    WS.streamComplete = true;
+    if (msg.pipeline) {
+      if (msg.is_greeting) {
+        S.lastLatencyData = { _isGreeting: true, pipeline: msg.pipeline, total_turn_ms: msg.total_turn_ms };
+      } else {
+        S.lastLatencyData = { pipeline: msg.pipeline, total_turn_ms: msg.total_turn_ms };
+      }
+      decodeStages(msg.pipeline, null);
+      renderLatency(S.lastLatencyData);
+      updateQueues(msg.pipeline.queues || {});
+      updateJitterPill(msg.pipeline.input_jitter, msg.pipeline.output_jitter);
+    }
+    if (WS.pendingTurnResolve) {
+      const r = WS.pendingTurnResolve;
+      WS.pendingTurnResolve = null;
+      r(msg);
+    }
+  }
+}
+
+async function triggerBargeIn(overrideTranscript = "") {
+  if (!S.callActive) return;
   const t0 = performance.now();
-  browserStopAudio();                       // <20 ms browser-side kill
-  // Add [interruption] marker to provide context for next turn
-  const interruptionLabel = " [interruption]";
-  beginUserTurnAfterBargeIn();                // VAD listening for the interruption
-  const typed = ($("#type-say")?.value || "").trim();
-  const payload = { call_id: "live", transcript: typed, update_cards: !!typed };
+  const spokenSnapshot = $("#agent-reply")?.textContent || "";
+  const pcmSnap = grabRecentMicPcmB64(450);
+  browserStopAudio();
+  const typed = (overrideTranscript || $("#type-say")?.value || "").trim();
+  beginUserTurnAfterBargeIn(!typed);
+  const payload = {
+    call_id: S.callId,
+    transcript: typed,
+    spoken_text: spokenSnapshot,
+    pcm_b64: pcmSnap,
+    source: typed ? "driver_correction" : "driver_button",
+    update_cards: !!typed,
+  };
+
+  if (typed) pushTranscript("barge", typed, "⚡ Driver interrupted [interrupted]", true);
 
   const res = await fetch(API.bargeIn, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
   const data = await res.json();
+  if (!res.ok || data.ok === false) {
+    setCallState(`⚠️ Barge-in warning: ${data.error || res.status}`);
+    return;
+  }
 
   litStage(7, data.flush_latency_ms, { hold: true });
-  setCallState(`🎧 Listening — stopped in ${Math.round(performance.now() - t0)} ms`);
-  const reply = $("#agent-reply");
-  if (reply) {
-    reply.textContent = `Stopped in ${Math.round(performance.now() - t0)} ms — go ahead, I'm listening.`;
+  // Tag cut-off agent turn with [interrupted] (without duplicating typed barge text)
+  applyInterruptedContext(typed ? { agent_cut: data.interrupted_context?.agent_cut } : data.interrupted_context);
+  const stopMs = Math.round(performance.now() - t0);
+  setCallState(`🎧 Interrupted in ${stopMs} ms — listening`);
+
+  if (typed) {
+    if ($("#type-say")) $("#type-say").value = "";
+    if (data.cards && data.cards.reply_text) {
+      renderTurn({
+        _skipTranscriptUser: true,
+        transcript: typed,
+        reply_text: data.cards.reply_text,
+        entities: data.cards.entities,
+        tools_invoked: data.cards.tools_invoked,
+        ticket_status: data.cards.ticket_status,
+        stage: data.cards.stage,
+        clauses: data.cards.clauses,
+      });
+      if (data.cards.clauses && data.cards.clauses.length) {
+        S.turnSentAt = t0;
+        await playClausesFromPayload(data.cards.clauses, data.cards.reply_text);
+      }
+    }
+    await agentDoneReplying();
+  } else {
+    const reply = $("#agent-reply");
+    if (reply) reply.textContent = `Stopped in ${stopMs} ms — go ahead, I'm listening.`;
   }
-  if (typed) $("#type-say").value = "";
 }
 
-$("#btn-barge-in").onclick = triggerBargeIn;
-$("#btn-barge-in-2").onclick = triggerBargeIn;
+$("#btn-barge-in").onclick = () => triggerBargeIn("");
+$("#btn-barge-in-2").onclick = () => triggerBargeIn("");
 
 function maybeEnableBarge() {
-  const on = S.playing || S.awaitingAgentReply;
+  const on = S.callActive && (S.playing || S.awaitingAgentReply);
   $("#btn-barge-in").disabled = !on;
   const b2 = $("#btn-barge-in-2");
   if (b2) b2.disabled = !on;
 }
 
 /* ============================================================
-   Turn submission (Stage 1 → 8 full round trip)
+   Turn submission (Stage 1 → 8 full round trip, WS-first)
    ============================================================ */
 async function sendTurn(wavB64, transcriptOverride) {
   S.awaitingAgentReply = true;
   VAD.awaiting = true;
-  S.turnSentAt = performance.now();     // true TTFA clock starts here
+  maybeEnableBarge();
+  S.turnSentAt = performance.now();
   try {
+    if (WS.open && WS.sock && WS.sock.readyState === 1) {
+      const done = await new Promise((resolve) => {
+        WS.pendingTurnResolve = resolve;
+        WS.sock.send(JSON.stringify({
+          type: "end_turn",
+          wav_b64: wavB64 || "",
+          transcript_override: transcriptOverride || "",
+          endpoint_mode: S.mode,
+          vad_silence_ms: S.vadSilenceMs,
+        }));
+      });
+      if (done) {
+        await waitForStreamingPlayback(S.lastTurnResult?.reply_text || "");
+        return;
+      }
+    }
+
     const body = {
-      call_id: "live",
+      call_id: S.callId,
       wav_b64: wavB64 || "",
       transcript_override: transcriptOverride || "",
       endpoint_mode: S.mode,
       vad_silence_ms: S.vadSilenceMs,
     };
-    const res = await fetch(API.turn, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const res = await fetch(API.turn, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
     const data = await res.json();
+    if (!res.ok || data.ok === false) {
+      throw new Error(data.error || `HTTP ${res.status}`);
+    }
     S.lastTurnResult = data;
     decodeStages(data.pipeline, null);
     renderTurn(data);
+    updateQueues(data.pipeline?.queues || {});
+    updateJitterPill(data.pipeline?.input_jitter, data.pipeline?.output_jitter);
+
     if (data.stt_empty) {
       $("#stt-transcript").textContent = "(no words recognised)";
-      setCallState(data.hint
-        ? `⚠️ STT empty — ${data.hint}`
-        : "🎧 Kuch sunai nahi diya — dobara boliye.");
-      $("#agent-reply").innerHTML =
-        `🤖 <b>Agent:</b> ${data.reply_text}` +
-        (data.hint ? `<div class="hint-sm" style="color:#fbbf24">⚠️ ${data.hint}</div>` : "");
+      setCallState(data.hint ? `⚠️ STT empty — ${data.hint}` : "🎧 Kuch sunai nahi diya — dobara boliye.");
+      $("#agent-reply").textContent = data.reply_text || "";
     }
-    // R4 contract: clauses[{audio_base64 data-URI}] (fallback: legacy clause_audio)
-    if (data.clauses && data.clauses.length) await playClausesFromPayload(data.clauses, data.reply_text);
-    else if (data.clause_audio && data.clause_audio.length)
-      await playClausesFromPayload(data.clause_audio.map(c => ({ text: c.text, audio_base64: c.audio_b64, latency_ms: c.tts_latency_ms })), data.reply_text);
+
+    if (data.clauses && data.clauses.length) {
+      await playClausesFromPayload(data.clauses, data.reply_text);
+    }
   } catch (e) {
-    $("#agent-reply").innerHTML = `⚠️ Network hiccup (${e.message}) — Credit-Shield kept the app alive. Try again.`;
+    const reply = $("#agent-reply");
+    if (reply) reply.textContent = `⚠️ Network hiccup (${e.message}) — Credit-Shield kept the session alive.`;
+    setCallState("⚠️ Recovery ready — try speaking or sending again");
   } finally {
-    // ALWAYS return to LISTENING so the next driver turn is accepted,
-    // even if playback threw or a barge-in cancelled it.
     await agentDoneReplying();
   }
 }
@@ -854,32 +1280,27 @@ async function agentDoneReplying() {
   S.awaitingAgentReply = false;
   VAD.awaiting = false;
   VAD.speechStartT = 0;
-  S.playing = false;             // guarantee playback flag is never stuck true
+  S.playing = false;
   maybeEnableBarge();
   if (!S.callActive) return;
   if (S.micDenied) { setCallState("Typed mode — no microphone"); return; }
-  if (S.mode === "auto_vad") startVad();   // back to LISTENING (Auto-VAD Active)
+  if (S.mode === "auto_vad") startVad();
   else setCallState("🎙️ PUSH-TO-TALK — hold the orb to reply");
 }
 
 /* ============================================================
-   UI LAYER
-   The engine above (mic → VAD → WAV → turn → jitter buffer) is
-   untouched here. This section only paints what it is doing:
-   the headline, the transcript, the orb and the latency band.
+   UI LAYER + LIVE CASE INTELLIGENCE RENDERING
    ============================================================ */
-
-/* ---------- the big headline: one line per agent state ---------- */
 const HERO_STATES = [
   [/Dialing/i,                        "Calling<br>BimaVani…",       "Dialing 1-800-BIMA-VANI — the line is connecting."],
-  [/Ringing/i,                        "Ringing…",                 "The agent's phone is ringing. Hang on a second."],
-  [/picked up/i,                      "Connected.",                  "The agent has picked up — say hello."],
-  [/LISTENING|Listening/i,            "Listening for<br>your turn.",   "Speak naturally — I answer the moment you pause."],
-  [/PUSH-TO-TALK/i,                   "Hold to talk.",                 "Press the orb, speak, release. No silence timer needed."],
+  [/Ringing/i,                        "Ringing…",                   "The agent's phone is ringing. Hang on a second."],
+  [/picked up/i,                      "Connected.",                 "The agent has picked up — say hello."],
+  [/LISTENING|Listening/i,            "Listening for<br>your turn.", "Speak naturally — I answer the moment you pause."],
+  [/PUSH-TO-TALK/i,                   "Hold to talk.",              "Press the orb, speak, release. Or click a scenario chip."],
   [/greeting|Agent connected|Speaking/i, "One moment —<br>I'm answering.", "The reply streams clause by clause through the jitter buffer."],
-  [/Processing|Thinking|turn/i,       "Thinking…",                     "Reading the situation before I speak."],
-  [/Typed mode/i,                     "Type your turn.",               "No microphone? Use the box in Voice agent setup."],
-  [/Call ended/i,                     "Call ended.",                   "Tap Call to start again."],
+  [/Processing|Thinking|turn/i,       "Thinking…",                  "Running injury triage, smart RSA routing, and IRDAI claim math."],
+  [/Typed mode/i,                     "Type or click<br>a scenario.", "No microphone detected — use the quick Hinglish scenarios or typed box."],
+  [/Call ended/i,                     "Call ended.",                "Tap Call to start a fresh session with clean memory."],
   [/Not connected|waiting|Press Call/i, "Tap call.<br>Then just talk.", "BimaVani answers in Hinglish, listens while you speak, and replies when you pause."],
 ];
 
@@ -897,28 +1318,23 @@ function updateHero(txt) {
   paintOrb();
 }
 
-/* ---------- the orb: is the agent listening, thinking or speaking? ---------- */
 function paintOrb() {
   const orb = $("#btn-ptt");
   if (!orb) return;
   const speaking = !!S.playing;
   const thinking = !!S.awaitingAgentReply && !speaking;
-  orb.classList.toggle("talking", speaking);
+  orb.classList.toggle("talking", !!VAD.isUserSpeaking || !!S.recording);
   orb.classList.toggle("thinking", thinking);
-  orb.classList.toggle("listening", !!VAD.active && !speaking && !thinking);
+  orb.classList.toggle("listening", !!VAD.active && !VAD.isUserSpeaking && !S.recording && !thinking);
   paintPhones();
 }
 
-/* ---------- the two handsets: which side of the call is talking? ----------
-   Same truth as the orb, painted onto the two-phone view: the caller's
-   handset lights up while the driver holds the turn, the agent's handset
-   lights up while BimaVani streams its clause-by-clause reply. */
 function paintPhonesBase() {
   const scene = $("#call-scene");
   if (!scene) return;
 
   const live = !!S.callActive && S.phase === "connected";
-  const driverSpeaking = !!VAD.isUserSpeaking;
+  const driverSpeaking = !!VAD.isUserSpeaking || !!S.recording;
   const agentSpeaking = !!S.playing;
   const agentThinking = !!S.awaitingAgentReply && !agentSpeaking;
   const listening = !!VAD.active && live && !driverSpeaking && !agentSpeaking && !agentThinking;
@@ -950,31 +1366,190 @@ function paintPhonesBase() {
     link.classList.toggle("is-live", live);
     link.classList.toggle("is-idle", !live);
   }
-  const label = $("#link-label");
-  if (label) label.textContent = live ? "Live" : "Idle";
-
   const status = $("#scene-status");
   if (status) {
     status.innerHTML = !live
       ? (S.callEnded
-          ? "Call ended — tap <b>Call</b> to reconnect the two phones."
-          : "Tap <b>Call</b> to connect the two phones.")
+          ? "Call ended — tap <b>Call</b> to reconnect with a clean session."
+          : "Tap <b>Call</b> (or pick a scenario chip) to connect.")
       : (driverSpeaking ? "You're talking — BimaVani is listening."
-        : agentSpeaking  ? "BimaVani is answering…"
-        : agentThinking  ? "BimaVani is thinking…"
+        : agentSpeaking ? "BimaVani is answering…"
+        : agentThinking ? "BimaVani is thinking…"
         : "Both phones are on the line.");
   }
 }
 
+/* ---------- Live Case Intelligence & IRDAI Desk rendering ---------- */
+function renderTranscriptLog() {
+  const log = $("#transcript-log");
+  if (!log) return;
+  if (!S.transcriptItems.length) {
+    log.innerHTML = `<p class="muted">Multi-turn Hinglish conversation &amp; [interrupted] context log will appear here.</p>`;
+  } else {
+    log.innerHTML = S.transcriptItems.map(item => `
+      <div class="log-item ${escHtml(item.role)}${item.interrupted ? " interrupted" : ""}">
+        <div class="log-meta">${item.interrupted ? '<span class="int-tag">[interrupted]</span>' : ""}${escHtml(item.badge || item.role.toUpperCase())} · ${escHtml(item.ts)}</div>
+        <div>${escHtml(item.text)}</div>
+      </div>
+    `).join("");
+    log.scrollTop = log.scrollHeight;
+  }
+  const cnt = $("#log-count");
+  if (cnt) cnt.textContent = `${S.transcriptItems.length} msg${S.transcriptItems.length === 1 ? "" : "s"}`;
+}
+
+function pushTranscript(role, text, badge = "", interrupted = false) {
+  if (!text) return;
+  const last = S.transcriptItems[S.transcriptItems.length - 1];
+  if (last && last.role === role && last.text === text && !!last.interrupted === !!interrupted) return;
+  const now = new Date();
+  const ts = now.toTimeString().slice(0, 8);
+  S.transcriptItems.push({ role, text, badge, ts, interrupted: !!interrupted });
+  renderTranscriptLog();
+}
+
+function resetDeskUi() {
+  S.transcriptItems = [];
+  S.lastDispatch = null;
+  S.lastDraft = null;
+  const badge = $("#ticket-badge");
+  if (badge) { badge.textContent = "DRAFT"; badge.className = "chip-status"; }
+  const safety = $("#safety-banner");
+  if (safety) { safety.textContent = "🛡️ Safety Triage: Standby"; safety.className = "safety-pill is-neutral"; }
+  $("#ent-policy").textContent = "—";
+  $("#ent-road").textContent = "—";
+  $("#ent-parts").textContent = "—";
+  $("#ent-drivable").textContent = "—";
+  $("#ent-stage").textContent = "idle";
+  $("#rsa-wf-badge").textContent = "—";
+  $("#rsa-card").className = "desk-card";
+  $("#rsa-body").innerHTML = `<p class="muted">Start a call or click a demo scenario to view live RSA workflow routing (A: NCB Saver · B: Flatbed Tow · C: Cashless Self-Drive).</p>`;
+  $("#fnol-id-badge").textContent = "—";
+  $("#fnol-card").className = "desk-card";
+  $("#fnol-body").innerHTML = `<p class="muted">Synthetic DPDP-safe claim math (deductible + age-scaled depreciation + surveyor range disclaimer) populates automatically when applicable.</p>`;
+  $("#log-count").textContent = "0 turns";
+  $("#transcript-log").innerHTML = `<p class="muted">Multi-turn Hinglish conversation log will appear here.</p>`;
+}
+
+function renderCaseIntelligence(data) {
+  const ents = data.entities || {};
+  const tools = data.tools_invoked || [];
+  const status = data.ticket_status || "DRAFT";
+
+  // Ticket status pill
+  const tBadge = $("#ticket-badge");
+  if (tBadge) {
+    tBadge.textContent = status;
+    tBadge.className = "chip-status"
+      + (/EMERGENCY/i.test(status) ? " warn"
+        : /(APPLIED|DISPATCHED|NCB PROTECTED)/i.test(status) ? " live" : "");
+  }
+
+  // Safety triage banner
+  const triage = tools.find(t => t.tool === "triage_injury_and_safety") || {};
+  const injured = Boolean(ents.injured || triage.injured);
+  const safety = $("#safety-banner");
+  if (safety) {
+    if (injured) {
+      const calls = (ents.emergency_calls || triage.emergency_calls || [])
+        .map(c => c.label).join(" · ");
+      safety.textContent = `🚨 ${calls || "112 AMBULANCE + 112 POLICE DISPATCHED"}`;
+      safety.className = "safety-pill is-emergency";
+    } else if (data.stage && data.stage !== "idle") {
+      safety.textContent = "✅ SAFE — No injury reported";
+      safety.className = "safety-pill is-safe";
+    }
+  }
+
+  // Entities strip
+  $("#ent-policy").textContent = ents.policy_number ? `#${ents.policy_number}` : "—";
+  $("#ent-road").textContent = ents.road_explicit && ents.road_type ? ents.road_type : (ents.road_type ? `${ents.road_type} (inferred)` : "—");
+  $("#ent-parts").textContent = (ents.parts && ents.parts.length) ? ents.parts.join(", ") : "—";
+  $("#ent-drivable").textContent = (ents.parts && ents.parts.length)
+    ? (ents.is_drivable ? "Yes (Drivable)" : "No (Non-drivable)")
+    : "—";
+  $("#ent-stage").textContent = data.stage || "active";
+
+  // Dispatch & Claim Draft lookup (from current tools or persisted entities)
+  const disp = tools.find(t => t.tool === "dispatch_smart_rsa") || ents.last_dispatch || null;
+  const draft = tools.find(t => t.tool === "calculate_irdai_claim_draft") || ents.last_draft || null;
+
+  // RSA Card
+  const rsaCard = $("#rsa-card");
+  const rsaBody = $("#rsa-body");
+  const wfBadge = $("#rsa-wf-badge");
+  if (disp) {
+    S.lastDispatch = disp;
+    const wf = disp.workflow || "—";
+    wfBadge.textContent = wf === "EMERGENCY" ? "112 SOS" : `Workflow ${wf}`;
+    rsaCard.className = "desk-card"
+      + (wf === "EMERGENCY" ? " is-emergency" : wf === "A" ? " is-ncb" : "");
+    const g = disp.destination_garage;
+    const rural = disp.rural_reimbursement;
+    rsaBody.innerHTML = `
+      <div class="kv-list">
+        <div class="kv"><span>Workflow</span><b>${escHtml(disp.workflow_label || wf)}</b></div>
+        <div class="kv"><span>Dispatch</span><b>${escHtml(disp.dispatch_vendor || "—")}</b></div>
+        <div class="kv"><span>ETA</span><b>${disp.eta_mins ? `${escHtml(disp.eta_mins)} mins` : "Self-drive / Immediate"}</b></div>
+        ${disp.free_tow_km_limit ? `<div class="kv"><span>Free Tow Limit</span><b>${escHtml(disp.free_tow_km_limit)} km</b></div>` : ""}
+        ${g ? `<div class="kv"><span>Garage</span><b>${escHtml(g.name)} (${escHtml(g.network)})</b></div>` : ""}
+      </div>
+      ${disp.ncb_protected ? `<div class="callout">🛡️ 20% No-Claim Bonus Protected — Do NOT file an insurance claim.</div>` : ""}
+      ${disp.do_not_start_engine ? `<div class="callout warn">${escHtml(disp.engine_warning || "🔴 Do NOT Start Engine!")}</div>` : ""}
+      ${disp.nhai_patrol_alerted ? `<div class="callout">🛣️ 1033 NHAI Highway Patrol safety cones alerted.</div>` : ""}
+      ${rural && rural.eligible ? `<div class="callout">🚜 ${escHtml(rural.authority)} (${escHtml(rural.reason)})</div>` : ""}
+    `;
+  }
+
+  // FNOL Card
+  const fnolCard = $("#fnol-card");
+  const fnolBody = $("#fnol-body");
+  const fnolBadge = $("#fnol-id-badge");
+  if (disp && disp.workflow === "A") {
+    fnolBadge.textContent = "NO CLAIM (NCB SAFE)";
+    fnolCard.className = "desk-card is-ncb";
+    fnolBody.innerHTML = `
+      <div class="callout">🛡️ Intentionally skipped FNOL draft — minor RSA jobs keep your 20% NCB intact.</div>
+      <p class="muted">Zero deductible charged; covered under roadside assistance.</p>
+    `;
+  } else if (draft && draft.claim_id) {
+    S.lastDraft = draft;
+    fnolBadge.textContent = draft.claim_id;
+    fnolCard.className = "desk-card";
+    const items = draft.line_items || [];
+    fnolBody.innerHTML = `
+      <div class="kv-list">
+        <div class="kv"><span>Policy / Holder</span><b>#${escHtml(draft.policy_number)} · ${escHtml(draft.owner)}</b></div>
+        <div class="kv"><span>Vehicle</span><b>${escHtml(draft.vehicle)} (${escHtml(draft.plan)})</b></div>
+        <div class="kv"><span>Compulsory Deductible</span><b>₹${Number(draft.compulsory_deductible_inr || 0).toLocaleString()}</b></div>
+        <div class="kv"><span>Estimated Range</span><b>${escHtml(draft.estimated_range_display)}</b></div>
+      </div>
+      ${items.length ? `
+        <table class="dep-table">
+          <thead><tr><th>Part</th><th>Base</th><th>Dep</th><th>Allowable</th></tr></thead>
+          <tbody>
+            ${items.map(li => `
+              <tr>
+                <td>${escHtml(li.part)}</td>
+                <td>₹${li.genuine_cost_low.toLocaleString()}–${li.genuine_cost_high.toLocaleString()}</td>
+                <td>${escHtml(li.depreciation_pct_applied)}%</td>
+                <td>₹${li.allowable_low.toLocaleString()}–${li.allowable_high.toLocaleString()}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      ` : ""}
+      <p class="disclaimer">${escHtml(draft.status_label || "")}</p>
+    `;
+  }
+}
+
 /* ============================================================
-   Phone-call layer — dial → ring → the agent picks up → live.
-   Presentation only: ringback tone, call phase, incoming-call
-   screen. The voice engine above is untouched.
+   Phone-call animation layer
    ============================================================ */
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const RING = { ctx: null };
 
-/* ringback tone (400+425 Hz, double ring) heard by the caller */
 function ringStart() {
   ringStop();
   try {
@@ -990,20 +1565,22 @@ function ringStart() {
     const t0 = ctx.currentTime + 0.05;
     const burst = (t, d) => {
       g.gain.setValueAtTime(0, t);
-      g.gain.linearRampToValueAtTime(0.09, t + 0.03);
-      g.gain.setValueAtTime(0.09, t + d - 0.03);
+      g.gain.linearRampToValueAtTime(0.08, t + 0.03);
+      g.gain.setValueAtTime(0.08, t + d - 0.03);
       g.gain.linearRampToValueAtTime(0, t + d);
     };
-    burst(t0 + 0.8, 0.4);      // dialing finishes, then the double ring
-    burst(t0 + 1.4, 0.4);
+    burst(t0 + 0.4, 0.35);
+    burst(t0 + 1.0, 0.35);
     RING.ctx = ctx;
-  } catch { /* audio is optional — the visuals still run */ }
+  } catch {}
 }
+
 function ringStop() {
   if (!RING.ctx) return;
   try { RING.ctx.close(); } catch {}
   RING.ctx = null;
 }
+
 function pickupBlip() {
   try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -1017,7 +1594,6 @@ function pickupBlip() {
   } catch {}
 }
 
-/* paints the call phase on both handsets (wraps the base painter above) */
 function paintPhones() {
   paintPhonesBase();
   const ph = S.phase;
@@ -1025,10 +1601,10 @@ function paintPhones() {
   if (scene) scene.dataset.phase = ph;
   const copy = {
     idle:      ["Ready to call", "Standby",       "Idle"],
-    dialing:   ["Calling…",     "Standby",       "Dialing"],
-    ringing:   ["Ringing…",    "Incoming call", "Ringing"],
-    connected: ["Connected",    "On call",       "Live"],
-    ended:     ["Call ended",   "Call ended",    "Idle"],
+    dialing:   ["Calling…",      "Standby",       "Dialing"],
+    ringing:   ["Ringing…",      "Incoming call", "Ringing"],
+    connected: ["Connected",     "On call",       "Live"],
+    ended:     ["Call ended",    "Call ended",    "Idle"],
   }[ph] || [];
   const set = (sel, v) => { const el = $(sel); if (el && v) el.textContent = v; };
   set("#caller-status", copy[0]);
@@ -1041,13 +1617,11 @@ function paintPhones() {
   if (link) link.classList.toggle("is-ringing", ph === "dialing" || ph === "ringing");
 }
 
-/* both handsets show the same running call time */
 setInterval(() => {
   const t = ($("#call-timer") || {}).textContent || "00:00";
   $$(".sync-timer").forEach((el) => { el.textContent = t; });
 }, 250);
 
-/* the mic orb: hold-to-talk / tap-to-latch in Push-to-talk, tap-to-send in Auto-VAD */
 const PTT = { _latchPending: false, downAt: 0 };
 (function bindOrb() {
   const orb = $("#btn-ptt");
@@ -1066,22 +1640,13 @@ const PTT = { _latchPending: false, downAt: 0 };
     if (!S.recording) { if (tap) PTT._latchPending = true; return; }
     if (tap) {
       S.pttLatched = true;
-      $("#ptt-hint").textContent = "🔴 Recording… click the mic again to send";
+      updateMicBtn();
     } else endTalk();
   });
   orb.addEventListener("click", () => { if (S.mode === "auto_vad") micToggle(); });
-  // the recorder swaps the orb's text for an emoji — put the glowing core back
-  new MutationObserver(() => {
-    if (!orb.querySelector(".orb-core")) {
-      orb.textContent = "";
-      const core = document.createElement("span");
-      core.className = "orb-core";
-      orb.appendChild(core);
-    }
-  }).observe(orb, { childList: true });
 })();
 
-/* ---------- measured latency (real backend timers + browser TTFA) ---------- */
+/* ---------- measured latency ---------- */
 function renderLatency(data) {
   data = data || S.lastLatencyData;
   if (!data) return;
@@ -1094,8 +1659,13 @@ function renderLatency(data) {
   const ttsMs = Number(st.stage_6 ?? 0) || 0;
   const backendMs = Number(data.total_turn_ms ?? 0) || 0;
   const ttfaMs = data.ttfa_ms != null ? Number(data.ttfa_ms) : null;
-  // Everything the browser adds on top of the backend answer.
   const netMs = ttfaMs != null ? Math.max(0, ttfaMs - backendMs) : null;
+
+  if (ttfaMs != null && !data._latPushed && !data._isGreeting) {
+    data._latPushed = true;
+    S.latencyHistory.push({ ttfa: ttfaMs, total: backendMs });
+    if (S.latencyHistory.length > 6) S.latencyHistory.shift();
+  }
 
   const set = (sel, v) => { const el = $(sel); if (el) el.textContent = v; };
   set("#flow-ttfa", ttfaMs != null ? Math.round(ttfaMs) : "—");
@@ -1124,40 +1694,36 @@ function renderLatency(data) {
         ? `<div class="lat-hist">last turns · ${S.latencyHistory.map(h => `${Math.round(h.ttfa)}/${Math.round(h.total)}`).join("  ·  ")} ms (TTFA / backend)</div>`
         : "");
   }
-
-  // remember the turn for the little history line
-  if (ttfaMs != null && !data._latPushed) {
-    data._latPushed = true;
-    S.latencyHistory.push({ ttfa: ttfaMs, total: backendMs });
-    if (S.latencyHistory.length > 6) S.latencyHistory.shift();
-  }
 }
 
-/* ---------- one turn, painted ---------- */
 function renderTurn(data) {
   if (!data) return;
-
-  S.lastLatencyData = data;
+  if (data.pipeline) S.lastLatencyData = data;
   const said = (data.transcript || "").trim();
   const transcript = $("#stt-transcript");
-  if (transcript) {
+  if (transcript && !data._isGreeting) {
     transcript.textContent = said || "…";
     transcript.classList.toggle("muted", !said);
   }
-
   const reply = $("#agent-reply");
   if (reply) reply.textContent = data.reply_text || "…";
 
-  renderLatency(data);
+  if (!data._isGreeting && !data._skipTranscriptUser && said && !data.stt_empty) {
+    pushTranscript("driver", said, "🧑 Driver");
+  }
+  if (data.reply_text) {
+    pushTranscript("agent", data.reply_text, "🤖 BimaVani");
+  }
+
+  renderCaseIntelligence(data);
+  if (data.pipeline) renderLatency(data);
   if (data.reply_text) setCallState("🤖 Speaking…");
   paintOrb();
 }
 
 /* ============================================================
-   Controls — mode, sliders, typed fallback, noise, health
+   Controls & Modals
    ============================================================ */
-
-/* turn-taking mode: Auto-VAD (hands free) or Push-to-talk */
 function syncPttControls() {
   const send = $("#btn-ptt-send");
   const cancel = $("#btn-ptt-cancel");
@@ -1165,29 +1731,45 @@ function syncPttControls() {
   if (cancel) cancel.disabled = !S.recording;
 }
 
+function sendWsConfig() {
+  if (WS.open && WS.sock && WS.sock.readyState === 1) {
+    try {
+      WS.sock.send(JSON.stringify({
+        type: "config",
+        endpoint_mode: S.mode,
+        vad_silence_ms: S.vadSilenceMs,
+        server_auto_endpoint: false,
+      }));
+    } catch {}
+  }
+}
+
 function syncModeUi() {
   $$(".seg-btn").forEach(b => b.classList.toggle("active", b.dataset.mode === S.mode));
   const ptt = $("#ptt-controls");
   if (ptt) ptt.classList.toggle("hidden", S.mode !== "push_to_talk");
   if (S.mode === "push_to_talk") stopVad();
-  else if (S.callActive) startVad();
+  else if (S.callActive && !S.micDenied) startVad();
   updateMicBtn();
+  sendWsConfig();
 }
 
 $$(".seg-btn").forEach(btn => {
   btn.addEventListener("click", () => {
     S.mode = btn.dataset.mode;
     syncModeUi();
-    setCallState(S.mode === "auto_vad"
-      ? "🎧 LISTENING (Auto-VAD Active)"
-      : "🎙️ PUSH-TO-TALK — hold the orb (or tap once) to speak");
+    if (S.callActive) {
+      setCallState(S.mode === "auto_vad"
+        ? "🎧 LISTENING (Auto-VAD Active)"
+        : "🎙️ PUSH-TO-TALK — hold the orb (or tap once) to speak");
+    }
   });
 });
 
-/* ear tuning */
 $("#vad-silence").addEventListener("input", (e) => {
   S.vadSilenceMs = parseInt(e.target.value, 10) || 650;
   $("#vad-window").textContent = S.vadSilenceMs;
+  sendWsConfig();
 });
 $("#vad-sens").addEventListener("input", (e) => {
   S.vadSens = parseFloat(e.target.value) || 2.2;
@@ -1196,63 +1778,74 @@ $("#vad-sens").addEventListener("input", (e) => {
     VAD.threshold = Math.max(VAD.ambientRms * S.vadSens, 0.018);
 });
 
-/* push-to-talk send / cancel */
 $("#btn-ptt-send").addEventListener("click", () => endTalk());
 $("#btn-ptt-cancel").addEventListener("click", () => cancelTalk());
 
-/* typed fallback: a full turn without a microphone (ASR bypassed) */
-async function sendTypedLine() {
-  if (!S.callActive) { setCallState("Press Call first"); return; }
-  const input = $("#type-say");
-  const text = input.value.trim();
+async function sendTypedLine(customText) {
+  const text = (customText ?? $("#type-say").value).trim();
   if (!text) return;
-  input.value = "";
+  if (!S.callActive) {
+    await startCallSession({ fastConnect: true });
+  }
+  if (!customText && $("#type-say")) $("#type-say").value = "";
   if (S.playing) browserStopAudio();
-  beginUserTurnAfterBargeIn();
-  VAD.isUserSpeaking = false;
+  beginUserTurnAfterBargeIn(false);
   setCallState("⏳ Processing turn…");
   await sendTurn("", text);
 }
-$("#btn-say").onclick = sendTypedLine;
+
+$("#btn-say").onclick = () => sendTypedLine();
 $("#type-say").addEventListener("keydown", (e) => {
   if (e.key === "Enter") { e.preventDefault(); sendTypedLine(); }
 });
 
-/* the pencil on the transcript card jumps to typed input */
 $("#say-edit").onclick = () => {
   const setup = document.querySelector(".setup");
   if (setup) setup.open = true;
   $("#type-say").focus();
 };
 
-/* road noise presets */
+// Quick demo scenario chips
+$$(".demo-chip").forEach(chip => {
+  chip.addEventListener("click", async () => {
+    const bargeText = chip.dataset.barge;
+    const utt = chip.dataset.utterance;
+    if (bargeText) {
+      if (!S.callActive) await startCallSession({ fastConnect: true });
+      await triggerBargeIn(bargeText);
+    } else if (utt) {
+      await sendTypedLine(utt);
+    }
+  });
+});
+
 $("#noise-preset").addEventListener("change", updateNoise);
 $("#noise-into-mic").addEventListener("change", updateNoise);
 $("#noise-aloud").addEventListener("change", updateNoise);
 
-function stopJitterAnything() { browserStopAudio(); }
-
-/* ---------- health: mode, brain engine, queue depths ---------- */
+/* ---------- health & queues ---------- */
 function updateQueues(queues) {
   document.querySelectorAll(".node-q").forEach(el => {
     const q = queues[el.dataset.q];
     if (!q) return;
-    el.textContent = q.depth > 0 ? String(q.depth) : "";
+    el.textContent = String(q.depth ?? 0);
+    el.classList.toggle("active", q.depth > 0);
     el.classList.toggle("full", !!q.backpressure_active);
   });
 }
 
 async function refreshHealth() {
   try {
-    const h = await (await fetch(API.health)).json();
+    const res = await fetch(API.health);
+    const h = await res.json();
     const pill = $("#mode-pill");
     if (pill) {
       const live = h.mode === "LIVE_GNANI";
       pill.textContent = live ? "🟢 live gnani" : "🛡 fallback";
-      pill.className = "chip-status" + (live ? " live" : "");
+      pill.className = "chip-status chip-clickable" + (live ? " live" : "");
     }
     const foot = $("#foot-meta");
-    if (foot) foot.textContent = `${h.stt_model} · ${h.tts_model} · bounded queues`;
+    if (foot) foot.textContent = `${h.stt_model} · ${h.tts_model} · ${h.gnani_base_url} · bounded queues (max 32)`;
 
     const b = h.brain || {};
     const on = b.engine === "llm+deterministic";
@@ -1261,8 +1854,12 @@ async function refreshHealth() {
       brainPill.textContent = on ? "🧠 LLM phrasing" : "🧠 Rules + tools";
       brainPill.className = "chip-status" + (on ? " live" : "");
       brainPill.title = on
-        ? `LLM ${b.model} phrases the turn; rules stay the source of truth`
-        : `LLM auto-retry armed${b.last_error ? " (last: " + b.last_error + ")" : ""} — the deterministic brain answers in ~20 ms meanwhile`;
+        ? `LLM ${b.model} active`
+        : `Deterministic Hinglish engine (~2ms)${b.last_error ? " · LLM standby: " + b.last_error : ""}`;
+    }
+    if (h.sessions) {
+      const sp = $("#session-pill");
+      if (sp) sp.textContent = `Sessions: ${h.sessions.active_sessions}/${h.sessions.max_sessions}`;
     }
     updateQueues(h.queues || {});
   } catch {
@@ -1271,8 +1868,134 @@ async function refreshHealth() {
   }
 }
 
-/* ---------- keyboard: space = push-to-talk hold, Esc = cancel ---------- */
+/* ---------- Modals: Gnani API & 20-Case Benchmark ---------- */
+function openModal(id) {
+  const m = document.getElementById(id);
+  if (m) m.classList.remove("hidden");
+}
+function closeModal(id) {
+  const m = document.getElementById(id);
+  if (m) m.classList.add("hidden");
+}
+
+$$("[data-close]").forEach(el => {
+  el.addEventListener("click", () => closeModal(el.dataset.close));
+});
 window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    closeModal("modal-gnani");
+    closeModal("modal-eval");
+  }
+});
+
+async function loadGnaniConfig() {
+  try {
+    const cfg = await (await fetch(API.config)).json();
+    $("#gnani-config-summary").innerHTML = `
+      <div><span>Mode</span><b>${cfg.live_mode ? "🟢 LIVE GNANI" : "🛡️ Credit-Shield Fallback"}</b></div>
+      <div><span>STT Model</span><b>${escHtml(cfg.stt_model)} (${escHtml(cfg.stt_language)})</b></div>
+      <div><span>TTS Model</span><b>${escHtml(cfg.tts_model)} · ${escHtml(cfg.tts_voice)}</b></div>
+      <div><span>API Key</span><b>${escHtml(cfg.api_key_masked || "not set")}</b></div>
+    `;
+  } catch {}
+}
+
+$("#btn-open-key").onclick = async () => { await loadGnaniConfig(); openModal("modal-gnani"); };
+$("#mode-pill").onclick = async () => { await loadGnaniConfig(); openModal("modal-gnani"); };
+$("#btn-open-eval").onclick = () => openModal("modal-eval");
+
+$("#key-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const key = $("#gnani-key-input").value.trim();
+  const statusEl = $("#key-save-status");
+  try {
+    const res = await fetch(API.setKey, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_key: key }),
+    });
+    const d = await res.json();
+    statusEl.textContent = d.live_mode
+      ? `✅ Key active (${d.api_key_masked}) — live mode enabled`
+      : "🛡️ Cleared key — Credit-Shield fallback engaged";
+    await loadGnaniConfig();
+    await refreshHealth();
+  } catch (err) {
+    statusEl.textContent = `❌ Failed: ${err.message}`;
+  }
+});
+
+$("#btn-verify-gnani").onclick = async () => {
+  const box = $("#verify-output");
+  box.classList.remove("hidden");
+  box.innerHTML = `<span class="muted">Running Timbre TTS → 16kHz resample → Prisma STT round-trip…</span>`;
+  try {
+    const res = await fetch(API.verify, { method: "POST" });
+    const d = await res.json();
+    box.innerHTML = `
+      <div><b>Status:</b> ${escHtml(d.ui_hint)}</div>
+      <div><b>TTS:</b> ${escHtml(d.tts_model)} · ${d.tts_latency_ms} ms ${d.tts_cached ? "(cache hit)" : ""} · ${d.tts_bytes} bytes</div>
+      <div><b>STT:</b> ${escHtml(d.stt_model)} · ${d.stt_latency_ms} ms · req <code>${escHtml(d.request_id || "—")}</code></div>
+      <div><b>Round-trip:</b> ${d.round_trip_ms} ms · <b>Match:</b> ${Math.round((d.match_ratio || 0) * 100)}%</div>
+      <div><b>Live transcript:</b> ${escHtml(d.live_transcript || "(empty)")}</div>
+    `;
+  } catch (err) {
+    box.innerHTML = `<div>❌ Error: ${escHtml(err.message)}</div>`;
+  }
+};
+
+$("#btn-run-eval").onclick = async () => {
+  const btn = $("#btn-run-eval");
+  const status = $("#eval-status");
+  btn.disabled = true;
+  status.textContent = "Running 20-case deterministic & acoustic suite…";
+  try {
+    const res = await fetch(API.eval, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ run: true }),
+    });
+    const data = await res.json();
+    const s = data.summary || {};
+    const byc = s.by_condition || {};
+    status.textContent = `Completed ${s.total_cases} cases · Domain accuracy ${(s.domain_accuracy * 100).toFixed(1)}% · Overall ${(s.overall_accuracy * 100).toFixed(1)}%`;
+    $("#eval-summary-cards").innerHTML = `
+      <div class="eval-kpi"><b>${s.total_cases || 0}</b><span>Total Cases</span></div>
+      <div class="eval-kpi"><b>${((s.domain_accuracy || 0) * 100).toFixed(0)}%</b><span>Scenario Accuracy</span></div>
+      <div class="eval-kpi"><b>${((s.overall_accuracy || 0) * 100).toFixed(0)}%</b><span>Overall (20/20)</span></div>
+      <div class="eval-kpi"><b>${s.avg_turn_ms ?? "—"} ms</b><span>Avg Brain ms</span></div>
+      <div class="eval-kpi"><b>${byc.HIGHWAY?.correct ?? 0}/${byc.HIGHWAY?.cases ?? 0}</b><span>NH-44 Highway</span></div>
+      <div class="eval-kpi"><b>${byc.GSM?.correct ?? 0}/${byc.GSM?.cases ?? 0}</b><span>8 kHz GSM</span></div>
+    `;
+    const rows = data.rows || [];
+    $("#eval-table-wrap").innerHTML = `
+      <table class="eval-table">
+        <thead><tr><th>ID</th><th>Case</th><th>Condition</th><th>Workflow</th><th>Status</th><th>ms</th><th>Pass</th></tr></thead>
+        <tbody>
+          ${rows.map(r => `
+            <tr>
+              <td><b>${escHtml(r.case_id)}</b></td>
+              <td>${escHtml(r.name)}</td>
+              <td>${escHtml(r.condition)}</td>
+              <td>${escHtml(r.workflow || r.final_road || "—")}</td>
+              <td>${escHtml(r.ticket_status || r.final_status || "—")}</td>
+              <td>${r.reply_ms != null ? escHtml(r.reply_ms) : "—"}</td>
+              <td>${r.domain_correct ? "✅" : "❌"}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    `;
+  } catch (err) {
+    status.textContent = `❌ Eval failed: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+};
+
+/* ---------- keyboard ---------- */
+window.addEventListener("keydown", (e) => {
+  if (document.activeElement && ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName)) return;
   if (e.key === " " && S.callActive && S.mode === "push_to_talk" && !S.recording && !e.repeat) {
     e.preventDefault(); startTalk(false);
   }
@@ -1286,7 +2009,7 @@ window.addEventListener("keyup", (e) => {
 });
 
 /* ============================================================
-   Call lifecycle — 📞 Call greets first, then hands the mic back
+   Call lifecycle
    ============================================================ */
 function startCallTimer() {
   clearInterval(S.callTimer);
@@ -1298,100 +2021,130 @@ function startCallTimer() {
   }, 500);
 }
 
-$("#btn-dial").onclick = async () => {
+async function startCallSession(opts = {}) {
+  const fastConnect = !!opts.fastConnect;
+  S.callId = makeCallId();
   S.callActive = true;
   S.callEnded = false;
   S.micDenied = false;
   S.latencyHistory = [];
-  S.lastDispatch = null;
-  S.lastDraft = null;
-  // dump any previous jitter-buffer / playback audio so this call starts
-  // with fresh context — nothing from the last call is brought back
+  resetDeskUi();
   browserStopAudio();
-  S.phase = "dialing"; { const t = $("#call-timer"); if (t) t.textContent = "00:00"; }
+
+  S.phase = fastConnect ? "connected" : "dialing";
+  { const t = $("#call-timer"); if (t) t.textContent = "00:00"; }
   paintPhones();
   $("#btn-dial").disabled = true;
   $("#btn-end").disabled = false;
-  setCallState("Dialing 1-800-BIMA-VANI…");
-  const stt = $("#stt-transcript");
-  if (stt) stt.textContent = "…";
-  const reply = $("#agent-reply");
-  if (reply) reply.textContent = "…";
+  setCallState(fastConnect ? "Agent connected…" : "Dialing 1-800-BIMA-VANI…");
+  if ($("#stt-transcript")) $("#stt-transcript").textContent = "…";
+  if ($("#agent-reply")) $("#agent-reply").textContent = "…";
 
   try {
-    // 📞 Phone-call handshake: dial → ring → the agent picks up.
-    // The mic permission is asked while it rings, so the pickup is instant.
     const myCall = ++S.callSeq;
     const stillOn = () => S.callActive && S.callSeq === myCall;
-    ringStart();
-    const micReady = initAudioGraph().catch(() => {});
-    await sleep(800);
-    if (!stillOn()) return ringStop();
-    S.phase = "ringing"; paintPhones(); setCallState("Ringing…");
-    await Promise.all([sleep(2200), micReady]);
-    if (!stillOn()) return ringStop();
-    ringStop(); pickupBlip();
-    $("#agent-accept")?.classList.add("pressed");
-    await sleep(380);
-    if (!stillOn()) return;
-    $("#agent-accept")?.classList.remove("pressed");
+
+    const wsPromise = wsConnect(S.callId);
+
+    if (!fastConnect) {
+      ringStart();
+      const micReady = initAudioGraph().catch(() => {});
+      await sleep(650);
+      if (!stillOn()) { wsClose(); return ringStop(); }
+      S.phase = "ringing"; paintPhones(); setCallState("Ringing…");
+      await Promise.all([sleep(1400), micReady]);
+      if (!stillOn()) { wsClose(); return ringStop(); }
+      ringStop(); pickupBlip();
+      $("#agent-accept")?.classList.add("pressed");
+      await sleep(280);
+      if (!stillOn()) { wsClose(); return; }
+      $("#agent-accept")?.classList.remove("pressed");
+    } else {
+      await Promise.all([initAudioGraph().catch(() => {}), wsPromise]);
+    }
+
     S.phase = "connected"; startCallTimer(); paintPhones();
-    setCallState("Agent picked up…");
-    // (original flow continues: unlock audio, calibrate the room, greet)
-    await initAudioGraph();
     if (REC.ctx && REC.ctx.state === "suspended") await REC.ctx.resume();
     await updateNoise();
 
-    if (!S.micDenied) {
+    if (!S.micDenied && !fastConnect) {
       setCallState("Calibrating mic…");
-      await calibrateAmbient(300);       // learn the room before the greeting
+      await calibrateAmbient(260);
     }
 
     setCallState("Agent connected — greeting…");
-    S.turnSentAt = performance.now();    // TTFA clock for the greeting
-    const res = await fetch(API.start, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ call_id: "live" }),
-    });
-    const data = await res.json();
-    S.lastTurnResult = data;
-
-    decodeStages(data.pipeline, null);
-    renderTurn({
-      transcript: "(greeting)",
-      reply_text: data.greeting,
-      pipeline: data.pipeline,
-      total_turn_ms: data.total_start_ms,
-      ticket_status: data.ticket_status,
-    });
-    const transcript = $("#stt-transcript");
-    if (transcript) transcript.textContent = "Waiting for you to speak…";
-
+    S.turnSentAt = performance.now();
+    await wsPromise;
     window.speechSynthesis?.cancel?.();
-    // Greet while VAD is already armed so the driver can interrupt the greeting
-    // with their voice (the echo gate keeps the agent's own audio from triggering it).
-    const greet = playClausesFromPayload(data.clauses || [], data.greeting);
-    startVad();                          // greeting is interruptible by voice + UI
-    await greet;
+
+    if (WS.open && WS.sock && WS.sock.readyState === 1) {
+      await new Promise((resolve) => {
+        WS.pendingTurnResolve = resolve;
+        WS.sock.send(JSON.stringify({ type: "start" }));
+      });
+      if ($("#stt-transcript")) $("#stt-transcript").textContent = "Waiting for you to speak…";
+      if (!fastConnect) {
+        if (S.mode === "auto_vad" && !S.micDenied) startVad();
+        await waitForStreamingPlayback(S.lastTurnResult?.reply_text || "");
+      } else {
+        browserStopAudio();
+      }
+    } else {
+      const res = await fetch(API.start, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ call_id: S.callId }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
+      S.lastTurnResult = data;
+
+      decodeStages(data.pipeline, null);
+      renderTurn({
+        _isGreeting: true,
+        transcript: "",
+        reply_text: data.greeting,
+        pipeline: data.pipeline,
+        total_turn_ms: data.total_start_ms,
+        ticket_status: data.ticket_status,
+        stage: data.stage,
+      });
+      if ($("#stt-transcript")) $("#stt-transcript").textContent = "Waiting for you to speak…";
+
+      if (!fastConnect) {
+        const greet = playClausesFromPayload(data.clauses || [], data.greeting);
+        if (S.mode === "auto_vad" && !S.micDenied) startVad();
+        await greet;
+      }
+    }
 
     if (S.micDenied) {
       stopVad();
       setCallState("Typed mode — no microphone");
-      const hint = $("#ptt-hint");
-      if (hint) hint.textContent = "Mic blocked — type your turn in Voice agent setup";
     } else if (S.mode === "push_to_talk") {
       stopVad();
-      setCallState("🎙️ PUSH-TO-TALK — greeting can still be interrupted");
+      setCallState("🎙️ PUSH-TO-TALK — hold the orb to reply");
+    } else {
+      startVad();
     }
-    // auto_vad: VAD stays armed → LISTENING; the greeting can be interrupted mid-sentence
   } catch (e) {
-    speakFallback("Namaste! Main BimaVani Roadside Helpline se bol rahi hoon. Sabse pehle batayein — kya aap aur gaadi mein baithe sabhi log safe hain?");
+    ringStop();
+    stopVad();
+    wsClose();
+    S.callActive = false;
+    S.phase = "idle";
+    clearInterval(S.callTimer);
+    $("#btn-dial").disabled = false;
+    $("#btn-end").disabled = true;
+    maybeEnableBarge();
+    paintPhones();
     setCallState(`⚠️ ${e.message}`);
-    if (S.mode === "auto_vad" && !S.micDenied) startVad();
   }
-};
+}
+
+$("#btn-dial").onclick = () => startCallSession({ fastConnect: false });
 
 $("#btn-end").onclick = async () => {
+  const endedId = S.callId;
   S.callActive = false;
   S.callEnded = true; S.callSeq++; ringStop(); S.phase = "ended";
   clearInterval(S.callTimer);
@@ -1400,19 +2153,20 @@ $("#btn-end").onclick = async () => {
   stopVad();
   stopNoiseSpeaker();
   browserStopAudio();
+  if (WS.open && WS.sock && WS.sock.readyState === 1) {
+    try { WS.sock.send(JSON.stringify({ type: "end_call" })); } catch {}
+  }
+  wsClose();
+  maybeEnableBarge();
   setCallState("Call ended");
   paintPhones();
-  // Tell the backend to reset this call's agent memory so the next call
-  // starts with a clean slate (no cross-call context bleed).
   try {
     await fetch(API.end, {
       method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({ call_id: "live" }),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ call_id: endedId }),
     });
-  } catch (e) {
-    // best-effort; UI already reset locally
-  }
+  } catch {}
 };
 
 /* ---------- boot ---------- */
@@ -1422,4 +2176,4 @@ $("#vad-sens-val").textContent = S.vadSens.toFixed(1) + "×";
 syncModeUi();
 refreshHealth();
 setInterval(refreshHealth, 5000);
-setInterval(paintOrb, 400);          // keeps the orb honest during playback
+setInterval(paintOrb, 400);
