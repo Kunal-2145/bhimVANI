@@ -78,7 +78,15 @@ const S = {
   lastDispatch: null, lastDraft: null,
   transcriptItems: [],
   lastBargeNotifiedAt: 0,
+  languagePref: "indic-auto",
+  detectedLang: "hi-IN",
 };
+
+function detectTextLanguage(text, hint) {
+  if (/[\u0B80-\u0BFF]/.test(text || "")) return "ta-IN";
+  if ((hint || "").toLowerCase().startsWith("ta")) return "ta-IN";
+  return "hi-IN";
+}
 
 const WS = {
   sock: null,
@@ -90,6 +98,7 @@ const WS = {
   pendingTurnResolve: null,
   streamComplete: false,
   fallbackQueue: [],
+  fallbackLang: "hi-IN",
 };
 
 function setWsPill(txt, live = false) {
@@ -699,22 +708,38 @@ function stripDataUri(b64) {
   return b64;
 }
 
-function speakFallback(text) {
+function pickSpeechVoice(lang) {
+  try {
+    const voices = window.speechSynthesis?.getVoices?.() || [];
+    const prefix = String(lang || "hi-IN").toLowerCase().slice(0, 2);
+    return voices.find(v => (v.lang || "").toLowerCase() === lang.toLowerCase())
+      || voices.find(v => (v.lang || "").toLowerCase().startsWith(prefix))
+      || null;
+  } catch { return null; }
+}
+
+function speakFallback(text, lang) {
   try {
     if (!window.speechSynthesis || !text) return false;
+    const resolved = detectTextLanguage(text, lang || S.detectedLang);
     const u = new SpeechSynthesisUtterance(text);
-    u.lang = "hi-IN"; u.rate = 0.98; u.pitch = 1.05;
+    const v = pickSpeechVoice(resolved);
+    if (v) u.voice = v;
+    u.lang = resolved; u.rate = 0.98; u.pitch = 1.05;
     speechSynthesis.speak(u);
     return true;
   } catch { return false; }
 }
 
-function speakFallbackAsync(text) {
+function speakFallbackAsync(text, lang) {
   return new Promise((resolve) => {
     try {
       if (!window.speechSynthesis || !text) return resolve(false);
+      const resolved = detectTextLanguage(text, lang || S.detectedLang);
       const u = new SpeechSynthesisUtterance(text);
-      u.lang = "hi-IN"; u.rate = 0.98; u.pitch = 1.05;
+      const v = pickSpeechVoice(resolved);
+      if (v) u.voice = v;
+      u.lang = resolved; u.rate = 0.98; u.pitch = 1.05;
       u.onend = () => resolve(true);
       u.onerror = () => resolve(false);
       speechSynthesis.speak(u);
@@ -738,8 +763,9 @@ async function playClausesFromPayload(payloadClauses, fallbackText) {
     if (S.lastLatencyData) { S.lastLatencyData.ttfa_ms = firstMs; renderLatency(S.lastLatencyData); }
     litStage(6, 120);
     const spoken = payloadClauses.map(c => c.text).filter(Boolean).join(" ");
+    const clLang = (payloadClauses.find(c => c.language) || {}).language || S.detectedLang;
     try {
-      await speakFallbackAsync(spoken || fallbackText || "");
+      await speakFallbackAsync(spoken || fallbackText || "", clLang);
     } finally {
       S.playing = false;
       if (my === JITTER.token) maybeEnableBarge();
@@ -768,8 +794,9 @@ async function playClausesFromPayload(payloadClauses, fallbackText) {
     const firstMs = S.turnSentAt ? Math.max(1, performance.now() - S.turnSentAt) : 120;
     if (S.lastTurnResult) S.lastTurnResult.ttfa_ms = firstMs;
     if (S.lastLatencyData) { S.lastLatencyData.ttfa_ms = firstMs; renderLatency(S.lastLatencyData); }
+    const clLang = (payloadClauses.find(c => c.language) || {}).language || S.detectedLang;
     try {
-      await speakFallbackAsync(fallbackText || (payloadClauses.find(c => c.text) || {}).text || "");
+      await speakFallbackAsync(fallbackText || (payloadClauses.find(c => c.text) || {}).text || "", clLang);
     } finally {
       S.playing = false;
       if (my === JITTER.token) maybeEnableBarge();
@@ -824,8 +851,13 @@ JITTER.streamPromises = [];
 async function streamClauseToJitter(clause) {
   if (!clause) return;
   const my = JITTER.streamToken || JITTER.token;
+  if (clause.language) {
+    S.detectedLang = clause.language;
+    WS.fallbackLang = clause.language;
+  }
   if (clause.fallback) {
     WS.fallbackQueue.push(clause.text || "");
+    WS.fallbackLang = clause.language || S.detectedLang;
     S.playing = true;
     maybeEnableBarge();
     const firstMs = S.turnSentAt ? Math.max(1, performance.now() - S.turnSentAt) : 120;
@@ -878,13 +910,14 @@ async function streamClauseToJitter(clause) {
   JITTER.streamPromises.push(doneP);
 }
 
-async function waitForStreamingPlayback(fallbackText) {
+async function waitForStreamingPlayback(fallbackText, langHint) {
   const my = JITTER.streamToken;
   if (WS.fallbackQueue.length) {
     const text = WS.fallbackQueue.join(" ").trim() || fallbackText || "";
+    const lang = langHint || WS.fallbackLang || S.detectedLang;
     WS.fallbackQueue = [];
     try {
-      await speakFallbackAsync(text);
+      await speakFallbackAsync(text, lang);
     } finally {
       if (my === JITTER.token) { S.playing = false; maybeEnableBarge(); }
     }
@@ -1011,6 +1044,8 @@ function wsConnect(callId) {
           endpoint_mode: S.mode,
           vad_silence_ms: S.vadSilenceMs,
           server_auto_endpoint: false,
+          stt_language: S.languagePref,
+          language: S.languagePref === "ta-IN" ? "ta-IN" : "",
         }));
         clearTimeout(timer);
         done(true);
@@ -1098,10 +1133,13 @@ async function handleWsMessage(msg) {
     JITTER.streamEndAt = 0;
     JITTER.streamPromises = [];
     WS.fallbackQueue = [];
+    WS.fallbackLang = msg.language || detectTextLanguage(msg.reply_text || "", "");
+    S.detectedLang = WS.fallbackLang;
     WS.streamComplete = false;
     S.lastTurnResult = msg;
     renderTurn({
       _isGreeting: !!msg.is_greeting,
+      language: msg.language,
       transcript: msg.transcript || "",
       reply_text: msg.reply_text || "",
       entities: msg.entities,
@@ -1155,6 +1193,7 @@ async function triggerBargeIn(overrideTranscript = "") {
     pcm_b64: pcmSnap,
     source: typed ? "driver_correction" : "driver_button",
     update_cards: !!typed,
+    language: S.languagePref === "ta-IN" ? "ta-IN" : "",
   };
 
   if (typed) pushTranscript("barge", typed, "⚡ Driver interrupted [interrupted]", true);
@@ -1180,6 +1219,7 @@ async function triggerBargeIn(overrideTranscript = "") {
     if (data.cards && data.cards.reply_text) {
       renderTurn({
         _skipTranscriptUser: true,
+        language: data.cards.language,
         transcript: typed,
         reply_text: data.cards.reply_text,
         entities: data.cards.entities,
@@ -1218,6 +1258,7 @@ async function sendTurn(wavB64, transcriptOverride) {
   VAD.awaiting = true;
   maybeEnableBarge();
   S.turnSentAt = performance.now();
+  const explicitLang = S.languagePref === "ta-IN" ? "ta-IN" : "";
   try {
     if (WS.open && WS.sock && WS.sock.readyState === 1) {
       const done = await new Promise((resolve) => {
@@ -1228,10 +1269,12 @@ async function sendTurn(wavB64, transcriptOverride) {
           transcript_override: transcriptOverride || "",
           endpoint_mode: S.mode,
           vad_silence_ms: S.vadSilenceMs,
+          language: explicitLang,
+          stt_language: S.languagePref,
         }));
       });
       if (done) {
-        await waitForStreamingPlayback(S.lastTurnResult?.reply_text || "");
+        await waitForStreamingPlayback(S.lastTurnResult?.reply_text || "", S.lastTurnResult?.language || S.detectedLang);
         return;
       }
     }
@@ -1242,6 +1285,8 @@ async function sendTurn(wavB64, transcriptOverride) {
       transcript_override: transcriptOverride || "",
       endpoint_mode: S.mode,
       vad_silence_ms: S.vadSilenceMs,
+      language: explicitLang,
+      stt_language: S.languagePref,
     };
     const res = await fetch(API.turn, {
       method: "POST",
@@ -1421,6 +1466,8 @@ function resetDeskUi() {
   $("#ent-parts").textContent = "—";
   $("#ent-drivable").textContent = "—";
   $("#ent-stage").textContent = "idle";
+  if ($("#ent-lang")) $("#ent-lang").textContent = "—";
+  S.detectedLang = S.languagePref === "ta-IN" ? "ta-IN" : "hi-IN";
   $("#rsa-wf-badge").textContent = "—";
   $("#rsa-card").className = "desk-card";
   $("#rsa-body").innerHTML = `<p class="muted">Start a call or click a demo scenario to view live RSA workflow routing (A: NCB Saver · B: Flatbed Tow · C: Cashless Self-Drive).</p>`;
@@ -1462,6 +1509,11 @@ function renderCaseIntelligence(data) {
   }
 
   // Entities strip
+  const activeLang = data.language || ents.language || detectTextLanguage(data.reply_text || "", "");
+  S.detectedLang = activeLang;
+  if ($("#ent-lang")) {
+    $("#ent-lang").textContent = activeLang === "ta-IN" ? "தமிழ் (ta-IN)" : "Hinglish (hi-IN)";
+  }
   $("#ent-policy").textContent = ents.policy_number ? `#${ents.policy_number}` : "—";
   $("#ent-road").textContent = ents.road_explicit && ents.road_type ? ents.road_type : (ents.road_type ? `${ents.road_type} (inferred)` : "—");
   $("#ent-parts").textContent = (ents.parts && ents.parts.length) ? ents.parts.join(", ") : "—";
@@ -1739,10 +1791,19 @@ function sendWsConfig() {
         endpoint_mode: S.mode,
         vad_silence_ms: S.vadSilenceMs,
         server_auto_endpoint: false,
+        stt_language: S.languagePref,
+        language: S.languagePref === "ta-IN" ? "ta-IN" : "",
       }));
     } catch {}
   }
 }
+
+$("#lang-select")?.addEventListener("change", (e) => {
+  S.languagePref = e.target.value || "indic-auto";
+  if (S.languagePref === "ta-IN") S.detectedLang = "ta-IN";
+  else if (S.languagePref === "hi-IN") S.detectedLang = "hi-IN";
+  sendWsConfig();
+});
 
 function syncModeUi() {
   $$(".seg-btn").forEach(b => b.classList.toggle("active", b.dataset.mode === S.mode));
@@ -2077,22 +2138,31 @@ async function startCallSession(opts = {}) {
     await wsPromise;
     window.speechSynthesis?.cancel?.();
 
+    const explicitStartLang = S.languagePref === "ta-IN" ? "ta-IN" : "";
     if (WS.open && WS.sock && WS.sock.readyState === 1) {
       await new Promise((resolve) => {
         WS.pendingTurnResolve = resolve;
-        WS.sock.send(JSON.stringify({ type: "start" }));
+        WS.sock.send(JSON.stringify({
+          type: "start",
+          language: explicitStartLang,
+          stt_language: S.languagePref,
+        }));
       });
       if ($("#stt-transcript")) $("#stt-transcript").textContent = "Waiting for you to speak…";
       if (!fastConnect) {
         if (S.mode === "auto_vad" && !S.micDenied) startVad();
-        await waitForStreamingPlayback(S.lastTurnResult?.reply_text || "");
+        await waitForStreamingPlayback(S.lastTurnResult?.reply_text || "", S.lastTurnResult?.language || S.detectedLang);
       } else {
         browserStopAudio();
       }
     } else {
       const res = await fetch(API.start, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ call_id: S.callId }),
+        body: JSON.stringify({
+          call_id: S.callId,
+          language: explicitStartLang,
+          stt_language: S.languagePref,
+        }),
       });
       const data = await res.json();
       if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
@@ -2101,6 +2171,7 @@ async function startCallSession(opts = {}) {
       decodeStages(data.pipeline, null);
       renderTurn({
         _isGreeting: true,
+        language: data.language,
         transcript: "",
         reply_text: data.greeting,
         pipeline: data.pipeline,

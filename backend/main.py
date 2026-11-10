@@ -56,6 +56,7 @@ from backend.pipeline.brain import Brain, llm_status, llm_warmup
 from backend.pipeline.clause_buffer import split_into_clauses
 from backend.pipeline.endpointing import EndpointingState, analyze_wav_endpoint, endpoint_turn
 from backend.pipeline.queues import BUS, REGISTRY, SessionPipeline
+from backend.translit import detect_script_language
 
 APP_ROOT = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = APP_ROOT / "frontend"
@@ -91,9 +92,27 @@ def _sync_global_stage(stage_key: str, ms: float, sess: Optional[SessionPipeline
         sess.stages_ms[stage_key] = ms
 
 
-async def _synthesize_one_clause(c: Dict[str, Any], sess: Optional[SessionPipeline] = None) -> Dict[str, Any]:
+def _resolve_stt_lang(explicit: Optional[str], sess: Optional[SessionPipeline]) -> Optional[str]:
+    val = (explicit or (sess.stt_language if sess else "") or "").strip()
+    if val:
+        return val
+    if sess and sess.language == "ta-IN":
+        return "ta-IN"
+    return None
+
+
+async def _synthesize_one_clause(
+    c: Dict[str, Any],
+    sess: Optional[SessionPipeline] = None,
+    language: Optional[str] = None,
+) -> Dict[str, Any]:
     t0 = time.perf_counter()
-    synth = await synthesize_speech(c["text"], use_cache=True)
+    lang = (
+        language
+        or c.get("language")
+        or ("ta-IN" if detect_script_language(c.get("text", "")) == "ta-IN" else None)
+    )
+    synth = await synthesize_speech(c["text"], language=lang, use_cache=True)
     dt = (time.perf_counter() - t0) * 1000.0
     wav = synth["audio"] if is_valid_wav(synth.get("audio", b"")) else fallback_tts_wav(c["text"])
     if sess is not None:
@@ -103,6 +122,7 @@ async def _synthesize_one_clause(c: Dict[str, Any], sess: Optional[SessionPipeli
         "index": c["index"],
         "priority": c["priority"],
         "text": c["text"],
+        "language": lang or synth.get("language") or CONFIG.tts_language,
         "audio_base64": "data:audio/wav;base64," + base64.b64encode(wav).decode("ascii"),
         "latency_ms": round(dt, 1),
         "cached": bool(synth.get("cached", False)),
@@ -113,12 +133,13 @@ async def _synthesize_one_clause(c: Dict[str, Any], sess: Optional[SessionPipeli
 async def _synthesize_clauses(
     clauses: List[Dict[str, Any]],
     sess: Optional[SessionPipeline] = None,
+    language: Optional[str] = None,
 ) -> tuple[List[Dict[str, Any]], float]:
     """Synthesize up to 2 clauses through Timbre + fallback guard; return payloads and total TTS ms."""
     payloads: List[Dict[str, Any]] = []
     tts_total_ms = 0.0
     for c in clauses:
-        cp = await _synthesize_one_clause(c, sess=sess)
+        cp = await _synthesize_one_clause(c, sess=sess, language=language)
         tts_total_ms += float(cp["latency_ms"])
         payloads.append(cp)
     return payloads, tts_total_ms
@@ -148,6 +169,8 @@ class KeyIn(BaseModel):
 
 class StartIn(BaseModel):
     call_id: str = "live"
+    language: str = ""
+    stt_language: str = ""
 
 
 class TurnIn(BaseModel):
@@ -156,6 +179,8 @@ class TurnIn(BaseModel):
     transcript_override: str = ""
     endpoint_mode: str = "auto_vad"         # auto_vad | push_to_talk
     vad_silence_ms: int = 600
+    language: str = ""
+    stt_language: str = ""
 
 
 class BargeInIn(BaseModel):
@@ -166,11 +191,13 @@ class BargeInIn(BaseModel):
     pcm_b64: str = ""
     source: str = "driver_button"
     update_cards: bool = True
+    language: str = ""
 
 
 class TtsIn(BaseModel):
     text: str = Field(min_length=1, max_length=2000)
     use_cache: bool = True
+    language: str = ""
 
 
 class EvalIn(BaseModel):
@@ -280,6 +307,8 @@ async def call_start(payload: StartIn) -> Dict[str, Any]:
     BRAIN.reset_call(call_id)
     REGISTRY.remove(call_id)
     sess = REGISTRY.get_or_create(call_id)
+    sess.stt_language = (payload.stt_language or "").strip()
+    sess.language = (payload.language or "").strip()
     sm = get_state_machine(call_id)
     if sm.state != "IDLE":
         sm.transition("IDLE")
@@ -287,12 +316,16 @@ async def call_start(payload: StartIn) -> Dict[str, Any]:
     sm.transition("THINKING")
 
     t4 = time.perf_counter()
-    started = await BRAIN.start_call(call_id)
+    started = await BRAIN.start_call(call_id, language=payload.language or None)
     _sync_global_stage("stage_4", (time.perf_counter() - t4) * 1000.0, sess)
+    call_lang = started.get("language") or "hi-IN"
+    sess.language = call_lang
     sess.active_agent_reply = started["reply_text"]
 
     await sess.bus.hops["clause_buffer"].put(len(started["clauses"]))
-    clause_payloads, tts_ms = await _synthesize_clauses(started["clauses"], sess=sess)
+    clause_payloads, tts_ms = await _synthesize_clauses(
+        started["clauses"], sess=sess, language=call_lang
+    )
     sess.bus.hops["clause_buffer"].get_nowait()
     await sess.bus.hops["tts"].put(len(clause_payloads))
     _sync_global_stage("stage_6", tts_ms, sess)
@@ -308,6 +341,7 @@ async def call_start(payload: StartIn) -> Dict[str, Any]:
     return {
         "ok": True,
         "call_id": call_id,
+        "language": call_lang,
         "greeting": started["reply_text"],
         "stage": started["memory"]["stage"],
         "ticket_status": started.get("ticket_status"),
@@ -346,6 +380,8 @@ async def _run_turn_core(
     transcript_override: str = "",
     endpoint_mode: str = "auto_vad",
     vad_silence_ms: int = 600,
+    language: str = "",
+    stt_language: str = "",
 ) -> Dict[str, Any]:
     t_stage1 = time.perf_counter()
 
@@ -367,6 +403,7 @@ async def _run_turn_core(
     await sess.bus.hops["endpointing"].put(1)
 
     # [2] Prisma STT (or scripted override -> 0 ms / 0 credits)
+    stt_lang = _resolve_stt_lang(stt_language or language, sess)
     if transcript_override:
         transcript = transcript_override.strip()
         stt_meta: Dict[str, Any] = {
@@ -377,7 +414,7 @@ async def _run_turn_core(
             "skip_reason": "scripted_demo_transcript (0 credits)",
         }
     elif wav_bytes and len(wav_bytes) > 44:
-        stt_meta = await transcribe_wav(wav_bytes)
+        stt_meta = await transcribe_wav(wav_bytes, language_code=stt_lang)
     else:
         stt_meta = {"transcript": "", "request_id": "empty", "stt_latency_ms": 0.0, "fallback": True}
     _sync_global_stage("stage_2", float(stt_meta.get("stt_latency_ms") or 0.0), sess)
@@ -387,27 +424,29 @@ async def _run_turn_core(
 
     if not transcript:
         sess.bus.hops["stt"].get_nowait()
-        return await _empty_turn(call_id, sess, stt_meta, ep, sm)
+        return await _empty_turn(call_id, sess, stt_meta, ep, sm, language=language)
 
     # [4] Brain (deterministic tools + memory; optional LLM assist)
     sm.transition("THINKING")
     t4 = time.perf_counter()
-    result = await BRAIN.process_turn(call_id, transcript, stt_meta)
+    result = await BRAIN.process_turn(call_id, transcript, stt_meta, language=language or None)
     _sync_global_stage("stage_4", (time.perf_counter() - t4) * 1000.0, sess)
+    reply_lang = result.get("language") or "hi-IN"
+    sess.language = reply_lang
     sess.active_agent_reply = result.get("reply_text", "")
     sess.bus.hops["stt"].get_nowait()
     await sess.bus.hops["brain"].put(len(result["clauses"]))
 
     # [5] 2-Clause Buffer (time splitting + bus hop)
     t5 = time.perf_counter()
-    clause_batch = split_into_clauses(result["reply_text"], call_id)
+    clause_batch = split_into_clauses(result["reply_text"], call_id, language=reply_lang)
     clauses_list = clause_batch.as_list()
     sess.bus.hops["brain"].get_nowait()
     await sess.bus.hops["clause_buffer"].put([c["index"] for c in clauses_list])
     _sync_global_stage("stage_5", (time.perf_counter() - t5) * 1000.0, sess)
 
     # [6] Timbre TTS (<=2 clauses)
-    clauses_payload, tts_ms = await _synthesize_clauses(clauses_list, sess=sess)
+    clauses_payload, tts_ms = await _synthesize_clauses(clauses_list, sess=sess, language=reply_lang)
     _sync_global_stage("stage_6", tts_ms, sess)
     sess.bus.hops["clause_buffer"].get_nowait()
     await sess.bus.hops["tts"].put(sum(len(c["audio_base64"]) for c in clauses_payload))
@@ -426,6 +465,7 @@ async def _run_turn_core(
             "index": cp["index"],
             "priority": cp["priority"],
             "text": cp["text"],
+            "language": cp.get("language", reply_lang),
             "tts_latency_ms": cp["latency_ms"],
             "cached": cp["cached"],
             "fallback": cp["fallback"],
@@ -471,6 +511,8 @@ async def call_turn(payload: TurnIn) -> Dict[str, Any]:
         transcript_override=payload.transcript_override,
         endpoint_mode=payload.endpoint_mode,
         vad_silence_ms=payload.vad_silence_ms,
+        language=payload.language,
+        stt_language=payload.stt_language,
     )
 
 
@@ -480,19 +522,24 @@ async def _empty_turn(
     stt_meta: Dict[str, Any],
     ep: Dict[str, Any],
     sm: Any,
+    language: str = "",
 ) -> Dict[str, Any]:
     """STT returned no words — never stay silent: speak a 2-clause retry prompt."""
     sm.transition("THINKING")
+    mem = BRAIN.get_or_create_call(call_id)
+    lang_hint = (language or sess.language or mem.entities.get("language") or "hi-IN").lower()
+    lang = "ta-IN" if lang_hint.startswith("ta") else "hi-IN"
     reply = (
-        "Aapki awaaz mujhe saaf nahi aayi ji. "
-        "Mic check kijiye aur apni baat dobara boliye — main sun rahi hoon."
+        "உங்கள் குரல் தெளிவாகக் கேட்கவில்லை. மைக் சரிபார்த்து மீண்டும் சொல்லுங்கள் — நான் கேட்டுக்கொண்டிருக்கிறேன்."
+        if lang == "ta-IN"
+        else "Aapki awaaz mujhe saaf nahi aayi ji. Mic check kijiye aur apni baat dobara boliye — main sun rahi hoon."
     )
     sess.active_agent_reply = reply
     t5 = time.perf_counter()
-    batch = split_into_clauses(reply, call_id + "-empty")
+    batch = split_into_clauses(reply, call_id + "-empty", language=lang)
     _sync_global_stage("stage_5", (time.perf_counter() - t5) * 1000.0, sess)
 
-    clauses_payload, tts_ms = await _synthesize_clauses(batch.as_list(), sess=sess)
+    clauses_payload, tts_ms = await _synthesize_clauses(batch.as_list(), sess=sess, language=lang)
     _sync_global_stage("stage_6", tts_ms, sess)
     sm.transition("SPEAKING")
 
@@ -505,6 +552,7 @@ async def _empty_turn(
     return {
         "ok": True,
         "call_id": call_id,
+        "language": lang,
         "transcript": "",
         "reply_text": reply,
         "stt_empty": True,
@@ -515,9 +563,9 @@ async def _empty_turn(
             for c in clauses_payload
         ],
         "ticket_status": "DRAFT",
-        "entities": BRAIN.get_or_create_call(call_id).entities,
+        "entities": mem.entities,
         "tools_invoked": [],
-        "memory": BRAIN.get_or_create_call(call_id).snapshot(),
+        "memory": mem.snapshot(),
         "pipeline": {
             "stages_ms": _stages_snapshot(sess),
             "endpointing": ep,
@@ -543,6 +591,7 @@ async def _handle_barge_in_core(
     pcm_bytes: bytes = b"",
     source: str = "driver_button",
     update_cards: bool = True,
+    language: str = "",
 ) -> Dict[str, Any]:
     t0 = time.perf_counter()
     state_before = sm.state
@@ -568,12 +617,13 @@ async def _handle_barge_in_core(
         "peak_dbfs": dump_snap.get("peak_dbfs", -120.0),
         "jitter_ms_est": dump_snap.get("jitter_ms_est", 0.0),
     }
+    stt_lang = _resolve_stt_lang(language, sess)
     if wav_bytes and len(wav_bytes) > 44:
         ep_info = analyze_wav_endpoint(wav_bytes, sess.endpoint_state)
         audio_stats["peak_dbfs"] = ep_info.get("peak_dbfs", audio_stats["peak_dbfs"])
         audio_stats["duration_ms"] = round(ep_info.get("frames", 0) * 20.0, 1)
         if not transcript:
-            stt = await transcribe_wav(wav_bytes)
+            stt = await transcribe_wav(wav_bytes, language_code=stt_lang)
             if stt.get("transcript"):
                 transcript = stt["transcript"].strip()
 
@@ -589,13 +639,16 @@ async def _handle_barge_in_core(
     cards: Dict[str, Any] = {}
     if update_cards and transcript:
         sm.transition("THINKING")
-        updated = await BRAIN.process_turn(call_id, transcript, {"barge_in": True})
+        updated = await BRAIN.process_turn(call_id, transcript, {"barge_in": True}, language=language or None)
+        reply_lang = updated.get("language") or "hi-IN"
+        sess.language = reply_lang
         sess.active_agent_reply = updated.get("reply_text", "")
-        clauses_payload, tts_ms = await _synthesize_clauses(updated["clauses"], sess=sess)
+        clauses_payload, tts_ms = await _synthesize_clauses(updated["clauses"], sess=sess, language=reply_lang)
         _sync_global_stage("stage_6", tts_ms, sess)
         sm.transition("SPEAKING")
         cards = {
             "stage": updated["stage"],
+            "language": reply_lang,
             "entities": updated["entities"],
             "tools_invoked": updated["tools_invoked"],
             "reply_text": updated["reply_text"],
@@ -635,6 +688,7 @@ async def call_barge_in(payload: BargeInIn) -> Dict[str, Any]:
         pcm_bytes=_decode_b64(payload.pcm_b64),
         source=payload.source or "driver_button",
         update_cards=payload.update_cards,
+        language=payload.language,
     )
 
 
@@ -662,6 +716,8 @@ async def ws_call(websocket: WebSocket, call_id: str) -> None:
         transcript_override: str = "",
         mode: str = "auto_vad",
         vad_ms: int = 600,
+        language: str = "",
+        stt_language: str = "",
     ) -> None:
         t_start = time.perf_counter()
         cur = asyncio.current_task()
@@ -688,6 +744,7 @@ async def ws_call(websocket: WebSocket, call_id: str) -> None:
             await sess.bus.hops["endpointing"].put(1)
 
             # [2] STT
+            stt_lang = _resolve_stt_lang(stt_language or language, sess)
             if transcript_override:
                 transcript = transcript_override.strip()
                 stt_meta: Dict[str, Any] = {
@@ -697,7 +754,7 @@ async def ws_call(websocket: WebSocket, call_id: str) -> None:
                     "fallback": False,
                 }
             elif wav_bytes and len(wav_bytes) > 44:
-                stt_meta = await transcribe_wav(wav_bytes)
+                stt_meta = await transcribe_wav(wav_bytes, language_code=stt_lang)
             else:
                 stt_meta = {"transcript": "", "request_id": "empty", "stt_latency_ms": 0.0, "fallback": True}
 
@@ -716,7 +773,7 @@ async def ws_call(websocket: WebSocket, call_id: str) -> None:
 
             if not transcript:
                 sess.bus.hops["stt"].get_nowait()
-                empty_res = await _empty_turn(call_id, sess, stt_meta, ep, sm)
+                empty_res = await _empty_turn(call_id, sess, stt_meta, ep, sm, language=language)
                 await send_evt({"type": "brain_result", **empty_res})
                 for cp in empty_res["clauses"]:
                     await send_evt({"type": "tts_clause", "call_id": call_id, "clause": cp})
@@ -726,15 +783,19 @@ async def ws_call(websocket: WebSocket, call_id: str) -> None:
             # [4] Brain
             sm.transition("THINKING")
             t4 = time.perf_counter()
-            result = await BRAIN.process_turn(call_id, transcript, stt_meta)
+            result = await BRAIN.process_turn(call_id, transcript, stt_meta, language=language or None)
             _sync_global_stage("stage_4", (time.perf_counter() - t4) * 1000.0, sess)
+            reply_lang = result.get("language") or "hi-IN"
+            sess.language = reply_lang
             sess.active_agent_reply = result.get("reply_text", "")
             sess.bus.hops["stt"].get_nowait()
             await sess.bus.hops["brain"].put(len(result["clauses"]))
 
             # [5] 2-Clause Buffer
             t5 = time.perf_counter()
-            clauses_list = split_into_clauses(result["reply_text"], call_id).as_list()
+            clauses_list = split_into_clauses(result["reply_text"], call_id, language=reply_lang).as_list()
+            for cl in clauses_list:
+                cl["language"] = reply_lang
             sess.bus.hops["brain"].get_nowait()
             await sess.bus.hops["clause_buffer"].put([c["index"] for c in clauses_list])
             _sync_global_stage("stage_5", (time.perf_counter() - t5) * 1000.0, sess)
@@ -743,6 +804,7 @@ async def ws_call(websocket: WebSocket, call_id: str) -> None:
                 "type": "brain_result",
                 "call_id": call_id,
                 "stage": result["stage"],
+                "language": reply_lang,
                 "transcript": transcript,
                 "reply_text": result["reply_text"],
                 "entities": result["entities"],
@@ -758,7 +820,7 @@ async def ws_call(websocket: WebSocket, call_id: str) -> None:
             tts_total_ms = 0.0
             streamed_clauses: List[Dict[str, Any]] = []
             for c in clauses_list:
-                cp = await _synthesize_one_clause(c, sess=sess)
+                cp = await _synthesize_one_clause(c, sess=sess, language=reply_lang)
                 tts_total_ms += float(cp["latency_ms"])
                 streamed_clauses.append(cp)
                 await sess.bus.hops["tts"].put(len(cp["audio_base64"]))
@@ -772,6 +834,7 @@ async def ws_call(websocket: WebSocket, call_id: str) -> None:
             await send_evt({
                 "type": "turn_complete",
                 "call_id": call_id,
+                "language": reply_lang,
                 "total_turn_ms": round((time.perf_counter() - t_start) * 1000, 1),
                 "pipeline": {
                     "stages_ms": _stages_snapshot(sess),
@@ -814,6 +877,10 @@ async def ws_call(websocket: WebSocket, call_id: str) -> None:
                     sess.input_jitter.configure_vad(int(msg["vad_silence_ms"]))
                 if "server_auto_endpoint" in msg:
                     server_auto_endpoint = bool(msg["server_auto_endpoint"])
+                if msg.get("stt_language") is not None:
+                    sess.stt_language = str(msg["stt_language"] or "").strip()
+                if msg.get("language") is not None:
+                    sess.language = str(msg["language"] or "").strip()
 
             elif mtype == "start":
                 if active_turn_task and not active_turn_task.done():
@@ -821,16 +888,22 @@ async def ws_call(websocket: WebSocket, call_id: str) -> None:
                 BRAIN.reset_call(call_id)
                 sess.input_jitter.clear_speech()
                 sess.output_jitter.flush()
+                if msg.get("stt_language") is not None:
+                    sess.stt_language = str(msg["stt_language"] or "").strip()
+                req_lang = str(msg.get("language") or "").strip()
                 if sm.state != "IDLE":
                     sm.transition("IDLE")
                 sm.transition("LISTENING")
                 sm.transition("THINKING")
-                started = await BRAIN.start_call(call_id)
+                started = await BRAIN.start_call(call_id, language=req_lang or None)
+                call_lang = started.get("language") or "hi-IN"
+                sess.language = call_lang
                 sess.active_agent_reply = started["reply_text"]
                 await send_evt({
                     "type": "brain_result",
                     "call_id": call_id,
                     "is_greeting": True,
+                    "language": call_lang,
                     "stage": started["memory"]["stage"],
                     "reply_text": started["reply_text"],
                     "ticket_status": started["ticket_status"],
@@ -839,12 +912,13 @@ async def ws_call(websocket: WebSocket, call_id: str) -> None:
                 })
                 sm.transition("SPEAKING")
                 for c in started["clauses"]:
-                    cp = await _synthesize_one_clause(c, sess=sess)
+                    cp = await _synthesize_one_clause(c, sess=sess, language=call_lang)
                     await send_evt({"type": "tts_clause", "call_id": call_id, "clause": cp})
                 await send_evt({
                     "type": "turn_complete",
                     "call_id": call_id,
                     "is_greeting": True,
+                    "language": call_lang,
                     "pipeline": {
                         "stages_ms": _stages_snapshot(sess),
                         "queues": sess.bus.snapshot(),
@@ -913,6 +987,7 @@ async def ws_call(websocket: WebSocket, call_id: str) -> None:
                     pcm_bytes=_decode_b64(msg.get("pcm_b64", "")),
                     source=str(msg.get("source") or "client_barge_in"),
                     update_cards=bool(msg.get("update_cards", True)),
+                    language=str(msg.get("language") or ""),
                 )
                 await send_evt({"type": "barge_in_ack", **ack})
 
@@ -928,6 +1003,8 @@ async def ws_call(websocket: WebSocket, call_id: str) -> None:
                         transcript_override=str(msg.get("transcript_override") or ""),
                         mode=str(msg.get("endpoint_mode") or sess.endpoint_state.mode),
                         vad_ms=int(msg.get("vad_silence_ms") or sess.endpoint_state.vad_silence_ms),
+                        language=str(msg.get("language") or ""),
+                        stt_language=str(msg.get("stt_language") or ""),
                     )
                 )
 
@@ -969,7 +1046,11 @@ async def call_end(payload: EndIn) -> Dict[str, Any]:
 
 @app.post("/api/tts")
 async def tts(payload: TtsIn) -> Dict[str, Any]:
-    synth = await synthesize_speech(payload.text, use_cache=payload.use_cache)
+    lang = (
+        payload.language.strip()
+        or ("ta-IN" if detect_script_language(payload.text) == "ta-IN" else None)
+    )
+    synth = await synthesize_speech(payload.text, language=lang, use_cache=payload.use_cache)
     wav = synth["audio"] if is_valid_wav(synth.get("audio", b"")) else fallback_tts_wav(payload.text)
     return {
         "audio_b64": base64.b64encode(wav).decode("ascii"),
@@ -977,6 +1058,7 @@ async def tts(payload: TtsIn) -> Dict[str, Any]:
         "tts_latency_ms": synth.get("tts_latency_ms"),
         "model": synth.get("model"),
         "voice": synth.get("voice"),
+        "language": synth.get("language") or lang or CONFIG.tts_language,
         "fallback": synth.get("fallback"),
     }
 

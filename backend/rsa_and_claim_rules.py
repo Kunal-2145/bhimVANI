@@ -237,7 +237,7 @@ def _parse_number_strings_detailed(text: str) -> List[Tuple[str, bool]]:
         if val_str in seen or not (100 <= int_val <= 99999):
             continue
         after = t[e:e + 20]
-        neg = bool(re.search(r"^\W*(?:nahi|nahin|na|wrong|galat|null|koni)\b", after))
+        neg = bool(re.search(r"^\W*(?:nahi|nahin|na|wrong|galat|null|koni|இல்ல|இல்லை|வேண்டாம்|தப்பு|தவறு)\b", after))
         out.append((val_str, neg))
         seen.add(val_str)
     return out
@@ -490,7 +490,8 @@ def confirm_detection(transcript: str, prior_policy: Optional[str] = None) -> st
 _SAFE = re.compile(
     r"\b(?:safe|सुरक्षित|सब ठीक|सब सुरक्षित|theek hai|thik hai|सब ठीक है|"
     r"koi chot nahi|koi takleef nahi|chot nahi lagi|chot nahi hui|chot na lagi|"
-    r"sab thik|sab safe|sab surakshit|khatre mein nahi)\b",
+    r"sab thik|sab safe|sab surakshit|khatre mein nahi|"
+    r"பாதுகாப்பு|பாதுகாப்பாக|பத்திரம்|நல்லா இருக்கோம்|காயமில்லை|அடிபடல)\b",
     re.IGNORECASE,
 )
 
@@ -579,12 +580,21 @@ def triage_injury_and_safety(transcript: str) -> Dict[str, Any]:
                     "aur 1033 highway patrol bhej rahi hoon. Kripya phone band mat kijiye — "
                     "ek officer aapko directly connect kar rahi hoon."
                 ),
+                "spoken_empathy_ta": (
+                    "உங்கள் உயிர் தான் எங்களுக்கு மிக முக்கியம். உடனடியாக 112 ஆம்புலன்ஸ் "
+                    "மற்றும் 1033 நெடுஞ்சாலை ரோந்துப் படையை அனுப்புகிறேன். தயவுசெய்து அழைப்பைத் "
+                    "துண்டிக்காதீர்கள் — அவசர உதவி அதிகாரியுடன் நேரடியாக இணைக்கிறேன்."
+                ),
                 "claim_intake_paused_reason": "Human safety > claim forms. FNOL resumed only after medical handoff.",
             }
         )
     else:
-        out.update({"emergency_calls": [], "halt_claim_intake": False,
-                    "spoken_empathy_hi": "Shukar hai ki aap safe hain."})
+        out.update({
+            "emergency_calls": [],
+            "halt_claim_intake": False,
+            "spoken_empathy_hi": "Shukar hai ki aap safe hain.",
+            "spoken_empathy_ta": "நல்லவேளை, நீங்கள் பாதுகாப்பாக இருக்கிறீர்கள்.",
+        })
     return out
 
 
@@ -667,6 +677,11 @@ def dispatch_smart_rsa(road_type: str, parts: List[str], is_drivable: bool,
                     "aur service bilkul FREE hogi. Sabse badi baat — aapke 20 percent No-Claim "
                     "Bonus salamat rahenge, isliye claim file bilkul mat kijiye."
                 ),
+                "do_not_claim_spoken_ta": (
+                    "நல்ல செய்தி! இது சிறிய பழுதுதான். 22 நிமிடங்களில் சாலை உதவி பணியாளர் "
+                    "உங்கள் இடத்திற்கு வருவார், இந்த சேவை முற்றிலும் இலவசம். காப்பீட்டு கோரிக்கை "
+                    "போட வேண்டாம் — உங்கள் இருபது சதவீத தள்ளுபடி சலுகை பாதுகாப்பாக இருக்கும்."
+                ),
             }
         )
         return out
@@ -683,6 +698,9 @@ def dispatch_smart_rsa(road_type: str, parts: List[str], is_drivable: bool,
                 "engine_warning": "🔴 Do NOT Start Engine! (radiator/axle/coolant/tyre damage risk)",
                 "engine_warning_spoken_hi": (
                     "Kripya gaadi start bilkul MAT kijiye — engine seize ho sakta hai."
+                ),
+                "engine_warning_spoken_ta": (
+                    "தயவுசெய்து வண்டியை ஸ்டார்ட் செய்யாதீர்கள் — என்ஜின் பழுதடைய வாய்ப்புள்ளது."
                 ),
                 "dispatch_vendor": wf["vendor"],
                 "dispatch_vendor_type": "flatbed_tow_truck",
@@ -720,6 +738,9 @@ def dispatch_smart_rsa(road_type: str, parts: List[str], is_drivable: bool,
             "photos_required": wf.get("photos_required", 4),
             "photo_instruction_spoken_hi": (
                 "Garage jaane se pehle number plate ke saath 4 photo zaroor kheench lein."
+            ),
+            "photo_instruction_spoken_ta": (
+                "பழுதுபார்க்கும் மையத்திற்குச் செல்லும் முன் எண் பலகை தெரியும்படி 4 புகைப்படங்கள் எடுத்துக்கொள்ளுங்கள்."
             ),
             "destination_garage": garage,
             "ncb_protected": False,
@@ -799,9 +820,14 @@ def calculate_irdai_claim_draft(policy_number: Optional[str], parts: List[str],
         "estimated_repair_high_inr": est_high,
         "estimated_range_display":
             f"₹{est_low:,} se ₹{est_high:,}" if est_high else "₹0 (RSA-covered minor job)",
+        "estimated_range_display_ta":
+            f"₹{est_low:,} முதல் ₹{est_high:,} வரை" if est_high else "₹0 (சாலை உதவி சிறிய பழுது)",
         "status_label": IRDAI["range_label"],
         "status_label_spoken_hi": (
             "Yeh anumaanit range hai — antim rashi surveyor nireekshan ke baad tay hogi."
+        ),
+        "status_label_spoken_ta": (
+            "இது மதிப்பீட்டுத் தொகை மட்டுமே — ஆய்வாளர் பரிசோதனைக்குப் பிறகு இறுதித் தொகை உறுதி செய்யப்படும்."
         ),
         "photos_required": 4,
         "age_of_vehicle_years": age_of_vehicle_years,
@@ -826,8 +852,44 @@ SPOKEN_PART: Dict[str, str] = {
     "ev_system_stuck": "EV system",
 }
 
+SPOKEN_PART_TA: Dict[str, str] = {
+    "radiator": "ரேடியேட்டர்",
+    "bumper": "பம்பர்",
+    "headlight": "ஹெட்லைட்",
+    "side_mirror": "சைடு மிரர்",
+    "axle": "ஆக்ஸில்",
+    "puncture": "டயர் பஞ்சர்",
+    "battery": "பேட்டரி",
+    "front_guard": "முன் கார்டு",
+    "clutch_wire": "கிளட்ச் ஒயர்",
+    "fuel_out": "பெட்ரோல் காலி",
+    "ev_system_stuck": "மின்கல அமைப்பு",
+}
 
-def spoken_part(parts: List[str]) -> str:
+_GARAGE_NAMES_TA: Dict[str, str] = {
+    "g_karnal_motors": "கர்னால் மோட்டார்ஸ் மையம்",
+    "g_karol_bagh_2w": "கரோல் பாக் இருசக்கர வாகன மையம்",
+    "g_meerut_2w": "மீரட் இருசக்கர வாகன மையம்",
+    "g_panipat_motors": "பானிபட் மோட்டார் வொர்க்ஸ் மையம்",
+    "g_chennai_ev": "சென்னை மின்சார வாகன பராமரிப்பு மையம்",
+    "g_delhi_motors": "டெல்லி என்.சி.ஆர். கேஷ்லெஸ் வாகன மையம்",
+    "g_rural_karnal_link": "கர்னால் லிங்க் ரோடு பழுதுபார்க்கும் மையம்",
+    "g_rural_panipat_4w": "பானிபட் கிராமப்புற பழுதுபார்க்கும் மையம்",
+}
+
+
+def _garage_name_for_lang(garage: Optional[Dict[str, Any]], language: str = "hi-IN") -> str:
+    if not garage:
+        return "அங்கீகரிக்கப்பட்ட பழுதுபார்க்கும் மையம்" if language == "ta-IN" else "network garage"
+    if language == "ta-IN":
+        gid = garage.get("id", "")
+        if gid in _GARAGE_NAMES_TA:
+            return _GARAGE_NAMES_TA[gid]
+        return "அங்கீகரிக்கப்பட்ட பழுதுபார்க்கும் மையம்"
+    return garage.get("name", "network garage")
+
+
+def spoken_part(parts: List[str], language: str = "hi-IN") -> str:
     """Human-friendly name of the highest-priority part (non-drivable first)."""
     if not parts:
         return ""
@@ -837,15 +899,84 @@ def spoken_part(parts: List[str]) -> str:
         key=lambda p: priority.get(PARTS.get(p, {}).get("safety", "minor_breakdown"), 3),
     )
     first = ordered[0]
+    if language == "ta-IN":
+        return SPOKEN_PART_TA.get(first, "வாகன பழுது")
     return SPOKEN_PART.get(first, PARTS.get(first, {}).get("display_en", first).split(" / ")[0].lower())
 
 
 def compose_agent_reply(incident: Dict[str, Any], ack: str = "",
-                        ask_confirm: bool = True) -> str:
+                        ask_confirm: bool = True, language: str = "hi-IN") -> str:
     """Turn structured tool outputs into ONE 2-clause-ready spoken reply."""
     tri = incident.get("triage", {})
     disp = incident.get("dispatch", {})
     draft = incident.get("claim_draft", {})
+
+    if language == "ta-IN":
+        if tri.get("injured"):
+            return tri.get("spoken_empathy_ta") or tri["spoken_empathy_hi"]
+
+        policy_no = disp.get("policy_number") or (draft.get("policy_number") if draft else "")
+        policy_ref = f"பாலிசி எண் {policy_no} கீழ் " if policy_no else "உங்கள் சாலை உதவி பாலிசி கீழ் "
+        part_word = spoken_part(disp.get("parts", []) or [], language="ta-IN") or "வாகன பழுது"
+        veh_cls = disp.get("vehicle_class", "four_wheeler")
+        mech_word = "இருசக்கர வாகன பணியாளர்" if veh_cls == "two_wheeler" else "சாலை உதவி பணியாளர்"
+
+        if disp.get("workflow") == "A":
+            opener = ack.strip() or "நல்லவேளை, நீங்கள் பாதுகாப்பாக இருக்கிறீர்கள்!"
+            clause1 = (
+                f"{opener} {part_word} என்பது சிறிய பிரச்சினைதான் — "
+                "கவலைப்படாதீர்கள், வண்டி பாதுகாப்பாக உள்ளது."
+            )
+            clause2 = (
+                f"நான் {disp.get('eta_mins', 22)} நிமிடங்களில் நேரடியாக {mech_word} அனுப்புகிறேன், "
+                "இந்த சாலை உதவி சேவை முற்றிலும் இலவசம், மேலும் காப்பீட்டு கோரிக்கை போடாததால் உங்கள் "
+                "20 சதவீத போனஸ் சலுகை பாதுகாப்பாக இருக்கும்"
+            )
+            if disp.get("nhai_patrol_alerted"):
+                clause2 += ", மேலும் பாதுகாப்பிற்காக 1033 நெடுஞ்சாலை ரோந்துப் படைக்கும் தகவல் தெரிவிக்கப்பட்டுள்ளது"
+            clause2 += (". உதவியை உறுதி செய்யவா?" if ask_confirm
+                        else " — உதவி அனுப்பப்பட்டுவிட்டது.")
+        elif disp.get("workflow") == "B" and (disp.get("rural_reimbursement") or {}).get("eligible"):
+            clause1 = (
+                f"{ack.strip() or 'நல்லவேளை, நீங்கள் பாதுகாப்பாக இருக்கிறீர்கள்!'} "
+                f"{part_word} சேதமடைந்துள்ளதால் தயவுசெய்து வண்டியை ஸ்டார்ட் செய்யாதீர்கள்."
+            )
+            clause2 = (
+                f"{policy_ref}அருகிலுள்ள பழுதுபார்க்கும் மையம் 2 மணி நேரத்திற்கு மேல் தொலைவில் உள்ளது — "
+                f"எனவே காப்பீட்டு ஒழுங்குமுறை விதிப்படி உள்ளூர் இழுவை வாகனத்திற்காக ₹{IRDAI['rural_towing_reimbursement_inr']} "
+                "திருப்பித் தர அனுமதி அளிக்கிறேன் — அதாவது உள்ளூர் கிரேன் ஏற்பாடும் செய்துகொள்ளலாம்."
+                + (" உறுதி செய்யட்டுமா?" if ask_confirm else "")
+            )
+        elif disp.get("workflow") == "B":
+            gname = _garage_name_for_lang(disp.get("destination_garage"), language="ta-IN")
+            est_ta = (draft.get("estimated_range_display_ta") or "") if draft else ""
+            clause1 = (
+                f"{ack.strip() or 'நல்லவேளை, நீங்கள் பாதுகாப்பாக இருக்கிறீர்கள்!'} "
+                f"{part_word} சேதமடைந்துள்ளதால் தயவுசெய்து வண்டியை ஸ்டார்ட் செய்யாதீர்கள்."
+            )
+            clause2 = (
+                f"{policy_ref}{gname} வழியாக இலவச இழுவை வாகனம் அனுப்புகிறோம்"
+                + (", மேலும் 1033 நெடுஞ்சாலை ரோந்துப் படையும் பாதுகாப்பு கூம்புகள் அமைக்கிறது" if disp.get("nhai_patrol_alerted") else "")
+                + (f", மற்றும் {est_ta} மதிப்பீட்டு கோரிக்கை நகல் தயாராக உள்ளது" if est_ta else "")
+                + (". உறுதி செய்யவா?" if ask_confirm else ".")
+            )
+        elif disp.get("workflow") == "C":
+            gname = _garage_name_for_lang(disp.get("destination_garage"), language="ta-IN")
+            est_ta = (draft.get("estimated_range_display_ta") or "") if draft else ""
+            clause1 = (
+                f"{ack.strip() or 'நல்லவேளை, நீங்கள் பாதுகாப்பாக இருக்கிறீர்கள்!'} "
+                "வண்டி ஓட்டக்கூடிய நிலையில் உள்ளது, வெளிப்புற சேதம் மட்டுமே தெரிகிறது."
+            )
+            clause2 = (
+                f"தயவுசெய்து எண் பலகை தெரியும்படி 4 புகைப்படங்கள் எடுத்து நேரடியாக {gname} செல்லுங்கள்"
+                + (f" — {est_ta} மதிப்பீட்டு கோரிக்கை நகல் தயாராக உள்ளது" if est_ta else "")
+                + (". பதிவை உறுதி செய்யவா?" if ask_confirm else ".")
+            )
+        else:
+            clause1 = ack.strip() or "புரிந்ததுங்க."
+            clause2 = "எனக்கு இன்னும் சிறிது விவரம் தேவை — வண்டியில் என்ன ஆனது, நீங்கள் இப்போது எங்கே இருக்கிறீர்கள்?"
+
+        return f"{clause1} {clause2}".strip()
 
     if tri.get("injured"):
         return tri["spoken_empathy_hi"]

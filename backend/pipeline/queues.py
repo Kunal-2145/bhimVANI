@@ -181,6 +181,8 @@ class SessionPipeline:
         self.input_jitter = InputJitterBuffer()
         self.output_jitter = OutputJitterBuffer()
         self.active_agent_reply: str = ""
+        self.language: str = ""
+        self.stt_language: str = ""
         self.created_at = time.time()
         self.last_active_at = self.created_at
 

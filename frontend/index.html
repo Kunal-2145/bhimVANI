@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>BimaVani — 24×7 Hinglish Voice RSA & IRDAI Claim Desk</title>
-<link rel="stylesheet" href="/style.css?v=20261110w">
+<link rel="stylesheet" href="/style.css?v=20261110t">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛣️</text></svg>">
 </head>
 <body>
@@ -42,6 +42,7 @@
       <p class="demo-label">TRY A REAL SCENARIO (AUTO-CALLS IF IDLE)</p>
       <div class="demo-chips">
         <button class="demo-chip" type="button" data-utterance="NH-44 highway par crash ho gaya, radiator phat gaya hai aur bumper mein dent hai, policy number 7820">🚗 NH-44 Crash (#7820)</button>
+        <button class="demo-chip" type="button" data-utterance="வணக்கம், எங்களுக்கு காயமில்லை, ஆனா ஹைவேல கார் ரேடியேட்டர் உடைஞ்சிடுச்சு, பாலிசி எண் 7820">🚗 தமிழ் NH-44 (#7820)</button>
         <button class="demo-chip" type="button" data-utterance="Delhi mein Activa ki battery dead aur puncture ho gaya hai, policy number 4491">🛵 City NCB Saver (#4491)</button>
         <button class="demo-chip" type="button" data-utterance="Gaon ki link road par Bolero ka axle twist ho gaya, tow bhejo policy number 9932">🚜 Rural Axle ₹1,500 (#9932)</button>
         <button class="demo-chip" type="button" data-utterance="Accident ho gaya, sar mein chot lagi hai khoon beh raha hai">🚨 Injury 112</button>
@@ -64,6 +65,14 @@
         </label>
 
         <label class="row">
+          <span class="row-label">Caller language</span>
+          <select id="lang-select">
+            <option value="indic-auto" selected>Auto (Hinglish / தமிழ் / EN)</option>
+            <option value="ta-IN">தமிழ் (Native Tamil · ta-IN)</option>
+            <option value="hi-IN">Hinglish / Hindi (hi-IN)</option>
+          </select>
+        </label>
+        <label class="row">
           <span class="row-label">Road noise</span>
           <select id="noise-preset">
             <option value="clean" selected>Clean studio</option>
@@ -78,7 +87,7 @@
         </div>
 
         <div class="type-row">
-          <input id="type-say" placeholder="No mic? Type Hinglish or Hindi…" autocomplete="off">
+          <input id="type-say" placeholder="No mic? Type Hinglish, Hindi or தமிழ்…" autocomplete="off">
           <button id="btn-say" class="btn-quiet" type="button">Send</button>
         </div>
         <p class="micro">Auto-VAD listens to the raw clean mic before any simulated road noise is mixed into the sent WAV.</p>
@@ -244,6 +253,7 @@
   </div>
 
   <div id="entity-strip" class="entity-strip">
+    <span class="ent-chip"><b>Language</b><em id="ent-lang">—</em></span>
     <span class="ent-chip"><b>Policy</b><em id="ent-policy">—</em></span>
     <span class="ent-chip"><b>Road</b><em id="ent-road">—</em></span>
     <span class="ent-chip"><b>Parts</b><em id="ent-parts">—</em></span>
@@ -384,6 +394,6 @@
   </div>
 </div>
 
-<script src="/app.js?v=20261110w"></script>
+<script src="/app.js?v=20261110t"></script>
 </body>
 </html>
