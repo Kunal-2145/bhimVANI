@@ -1,851 +1,5 @@
 [
   {
-    "call_id": "t-dev-full",
-    "at": 1794288558.068367,
-    "stage": "done",
-    "transcript": "हाँ कर दो",
-    "entities": {
-      "stage": "done",
-      "parts": [
-        "battery",
-        "radiator"
-      ],
-      "policy_number": "7820",
-      "road_type": "NH",
-      "road_explicit": true,
-      "is_drivable": false,
-      "drivable_reason": "Radiator burst / coolant leak",
-      "injured": false,
-      "confirm_intent": "confirm",
-      "last_dispatch": {
-        "tool": "dispatch_smart_rsa",
-        "road_type": "NH",
-        "vehicle_class": "four_wheeler",
-        "policy_number": "7820",
-        "parts": [
-          "battery",
-          "radiator"
-        ],
-        "timestamp_utc": "2026-11-10T05:29:18.061221+00:00",
-        "workflow": "B",
-        "workflow_label": "Workflow B — Non-Drivable Crash",
-        "do_not_start_engine": true,
-        "engine_warning": "🔴 Do NOT Start Engine! (radiator/axle/coolant damage risk)",
-        "engine_warning_spoken_hi": "Kripya gaadi start bilkul MAT kijiye — engine kekk ho sakta hai.",
-        "dispatch_vendor": "Free RSA Flatbed Tow Truck (up to 50 km)",
-        "dispatch_vendor_type": "flatbed_tow_truck",
-        "eta_mins": 38,
-        "free_tow_km_limit": 50,
-        "destination_garage": {
-          "id": "g_karnal_motors",
-          "name": "Karnal Motors Pvt Ltd",
-          "city": "Karnal",
-          "road_type": "NH",
-          "highway": "NH-44",
-          "km_marker": "126",
-          "cashless": true,
-          "network": "MDRT-CASHLESS-NET",
-          "services_2w": false,
-          "services_ev": false,
-          "phone": "090-SYN-001"
-        },
-        "nhai_patrol_alerted": true,
-        "nhai_patrol_detail": "1033 NHAI Highway Patrol — fast-lane safety cones requested",
-        "rural_reimbursement": null,
-        "ncb_protected": false,
-        "photos_note": "To invoice/rash record for surveyor: 4 photos with number plate visible."
-      },
-      "last_road_type": "NH",
-      "last_parts": [
-        "battery",
-        "radiator"
-      ],
-      "last_drivable": false,
-      "last_draft": {
-        "tool": "calculate_irdai_claim_draft",
-        "claim_id": "FNOL-45DB540B",
-        "policy_number": "7820",
-        "owner": "Rohit Mehra",
-        "vehicle": "Maruti Suzuki Swift VXi",
-        "vehicle_class": "four_wheeler",
-        "plan": "Zero-Dep Bumper-to-Bumper",
-        "zero_depreciation": true,
-        "idv_inr": 520000,
-        "compulsory_deductible_inr": 1000,
-        "line_items": [
-          {
-            "part": "battery",
-            "display_en": "Battery dead (minor RSA)",
-            "genuine_cost_low": 2800,
-            "genuine_cost_high": 4600,
-            "depreciation_pct_applied": 0.0,
-            "allowable_low": 2800,
-            "allowable_high": 4600
-          },
-          {
-            "part": "radiator",
-            "display_en": "Radiator burst / coolant leak",
-            "genuine_cost_low": 10500,
-            "genuine_cost_high": 12800,
-            "depreciation_pct_applied": 0.0,
-            "allowable_low": 10500,
-            "allowable_high": 12800
-          }
-        ],
-        "estimated_repair_low_inr": 12300,
-        "estimated_repair_high_inr": 16400,
-        "estimated_range_display": "₹12,300 se ₹16,400",
-        "status_label": "Estimated Range Subject to Surveyor Inspection — Not Final Approval",
-        "status_label_spoken_hi": "Yeh anumaanit range hai — aantim rashi sirf surveyor aur nireeksh ke baad.",
-        "photos_required": 4,
-        "age_of_vehicle_years": 2.0
-      }
-    },
-    "ticket_status": "✅ APPLIED & DISPATCHED",
-    "reply": "Confirm ho gaya ji — aapka insurance claim APPLY ho gaya aur roadside help DISPATCH ho gaya hai. Aapka RSA ticket aur FNOL claim card dono lock ho chuke hain. Help lagbhag 38 minute mein aayega. Aap chinta mat kijiye, hum hain na? Safe rahiye ji"
-  },
-  {
-    "call_id": "t-dev-emg",
-    "at": 1794288558.076267,
-    "stage": "emergency_handoff",
-    "transcript": "सर में चोट लग गई है और खून निकल रहा है",
-    "entities": {
-      "stage": "emergency_handoff",
-      "parts": [],
-      "policy_number": null,
-      "road_type": null,
-      "road_explicit": false,
-      "is_drivable": true,
-      "drivable_reason": "no visible damage / drivable",
-      "injured": true,
-      "confirm_intent": "none",
-      "emergency_calls": [
-        {
-          "line": "112",
-          "label": "🚨 112 AMBULANCE DISPATCHED"
-        },
-        {
-          "line": "112-POLICE",
-          "label": "👮 112 POLICE DISPATCHED"
-        }
-      ]
-    },
-    "ticket_status": "EMERGENCY — 112 AMBULANCE & POLICE DISPATCHED",
-    "reply": "Aapki jaan sabse pehle hai — main turant 112 ambulance aur 112 police bhej rahi hoon, kripya phone na kaatein. Ek emergency officer aapko directly connect kar rahi hoon. Gaadi mein baithe rahein, helmet/halki awaz mein rahiye."
-  },
-  {
-    "call_id": "ctx-agent",
-    "at": 1794288560.198569,
-    "stage": "incident",
-    "transcript": "mera tyre puncture ho gaya hai",
-    "entities": {
-      "stage": "incident",
-      "parts": [
-        "puncture"
-      ],
-      "policy_number": null,
-      "road_type": null,
-      "road_explicit": false,
-      "is_drivable": true,
-      "drivable_reason": "no visible damage / drivable",
-      "injured": false,
-      "confirm_intent": "none"
-    },
-    "ticket_status": "STAGE 2 — LOCATION NEEDED (minor repair)",
-    "reply": "Puncture? Achha, koi baat nahi ji. Aap abhi city ke andar hain, ya highway par?"
-  },
-  {
-    "call_id": "wf-a-battery",
-    "at": 1794288560.226512,
-    "stage": "incident",
-    "transcript": "battery dead ho gayi hai",
-    "entities": {
-      "stage": "incident",
-      "parts": [
-        "battery"
-      ],
-      "policy_number": null,
-      "road_type": null,
-      "road_explicit": false,
-      "is_drivable": true,
-      "drivable_reason": "no visible damage / drivable",
-      "injured": false,
-      "confirm_intent": "none"
-    },
-    "ticket_status": "STAGE 2 — LOCATION NEEDED (minor repair)",
-    "reply": "Battery? Achha, koi baat nahi ji. Aap abhi city ke andar hain, ya highway par?"
-  },
-  {
-    "call_id": "wf-a-battery",
-    "at": 1794288560.2427049,
-    "stage": "done",
-    "transcript": "highway par hoon",
-    "entities": {
-      "stage": "done",
-      "parts": [
-        "battery"
-      ],
-      "policy_number": null,
-      "road_type": "NH",
-      "road_explicit": true,
-      "is_drivable": true,
-      "drivable_reason": "no visible damage / drivable",
-      "injured": false,
-      "confirm_intent": "none",
-      "last_dispatch": {
-        "tool": "dispatch_smart_rsa",
-        "road_type": "NH",
-        "vehicle_class": "four_wheeler",
-        "policy_number": null,
-        "parts": [
-          "battery"
-        ],
-        "timestamp_utc": "2026-11-10T05:29:20.242619+00:00",
-        "workflow": "A",
-        "workflow_label": "Workflow A — Minor Breakdown (NCB Saver)",
-        "dispatch_vendor": "On-Spot 2-Wheeler Bike Mechanic",
-        "dispatch_vendor_type": "on_spot_bike_mechanic",
-        "eta_mins": 22,
-        "ncb_protected": true,
-        "do_not_claim_warning": "Ye chhoti si service RSA se FREE ho jayegi aur aapka 20% No-Claim Bonus bhi salamat rahega — isliye insurance claim FILE MAT kijiye!",
-        "do_not_claim_spoken_hi": "Sahi news! Ye chota breakdown hai. Bike mechanic sirf 22 minute mein aayega aur service bilkul FREE hogi. Sabse badi baat — aapke 20 percent No-Claim Bonus salamat rahenge, isliye claim file bilkul mat kijiye."
-      },
-      "last_road_type": "NH",
-      "last_parts": [
-        "battery"
-      ],
-      "last_drivable": true
-    },
-    "ticket_status": "✅ RSA DISPATCHED — NO CLAIM FILED (NCB PROTECTED)",
-    "reply": "Samajh gayi ji, aage badhte hain. Battery to chhoti si baat hai — tension mat lijiye, gaadi chalane layak hai. Main 22 minute mein on-spot mechanic bhej rahi hoon, service RSA se bilkul FREE hai, aur claim file nahi karne se aapka 20 percent No-Claim Bonus salamat rahega — dispatch ho gaya ji."
-  },
-  {
-    "call_id": "t-test5",
-    "at": 1794288596.8403032,
-    "stage": "emergency_handoff",
-    "transcript": "accident ho gaya hai bhaisahab, sar mein chot lag gayi hai khoon nikal raha hai, mera co-driver behosh hai, ambulance chahiye",
-    "entities": {
-      "parts": [],
-      "policy_number": null,
-      "road_type": null,
-      "road_explicit": false,
-      "is_drivable": true,
-      "drivable_reason": "no visible damage / drivable",
-      "injured": true,
-      "confirm_intent": "none",
-      "stage": "emergency_handoff",
-      "emergency_calls": [
-        {
-          "line": "112",
-          "label": "🚨 112 AMBULANCE DISPATCHED"
-        },
-        {
-          "line": "112-POLICE",
-          "label": "👮 112 POLICE DISPATCHED"
-        }
-      ]
-    },
-    "ticket_status": "EMERGENCY — 112 AMBULANCE & POLICE DISPATCHED",
-    "reply": "Aapki jaan sabse pehle hai — main turant 112 ambulance aur 112 police bhej rahi hoon, kripya phone na kaatein. Ek emergency officer aapko directly connect kar rahi hoon. Gaadi mein baithe rahein, helmet/halki awaz mein rahiye."
-  },
-  {
-    "call_id": "t-cb-hello helpli",
-    "at": 1794288596.8542988,
-    "stage": "confirm",
-    "transcript": "hello helpline ji, NH-44 highway par major crash ho gaya hai, radiator phat gaya hai aur coolant nikal raha hai, bumper mein dant bhi aa gaya hai, mera policy number 7820 hai",
-    "entities": {
-      "parts": [
-        "bumper",
-        "radiator"
-      ],
-      "policy_number": "7820",
-      "road_type": "NH",
-      "road_explicit": true,
-      "is_drivable": false,
-      "drivable_reason": "Radiator burst / coolant leak",
-      "injured": false,
-      "confirm_intent": "correct",
-      "last_dispatch": {
-        "tool": "dispatch_smart_rsa",
-        "road_type": "NH",
-        "vehicle_class": "four_wheeler",
-        "policy_number": "7820",
-        "parts": [
-          "bumper",
-          "radiator"
-        ],
-        "timestamp_utc": "2026-11-10T05:29:56.854244+00:00",
-        "workflow": "B",
-        "workflow_label": "Workflow B — Non-Drivable Crash",
-        "do_not_start_engine": true,
-        "engine_warning": "🔴 Do NOT Start Engine! (radiator/axle/coolant damage risk)",
-        "engine_warning_spoken_hi": "Kripya gaadi start bilkul MAT kijiye — engine kekk ho sakta hai.",
-        "dispatch_vendor": "Free RSA Flatbed Tow Truck (up to 50 km)",
-        "dispatch_vendor_type": "flatbed_tow_truck",
-        "eta_mins": 38,
-        "free_tow_km_limit": 50,
-        "destination_garage": {
-          "id": "g_karnal_motors",
-          "name": "Karnal Motors Pvt Ltd",
-          "city": "Karnal",
-          "road_type": "NH",
-          "highway": "NH-44",
-          "km_marker": "126",
-          "cashless": true,
-          "network": "MDRT-CASHLESS-NET",
-          "services_2w": false,
-          "services_ev": false,
-          "phone": "090-SYN-001"
-        },
-        "nhai_patrol_alerted": true,
-        "nhai_patrol_detail": "1033 NHAI Highway Patrol — fast-lane safety cones requested",
-        "rural_reimbursement": null,
-        "ncb_protected": false,
-        "photos_note": "To invoice/rash record for surveyor: 4 photos with number plate visible."
-      },
-      "last_road_type": "NH",
-      "last_parts": [
-        "bumper",
-        "radiator"
-      ],
-      "last_drivable": false,
-      "last_draft": {
-        "tool": "calculate_irdai_claim_draft",
-        "claim_id": "FNOL-934E14AE",
-        "policy_number": "7820",
-        "owner": "Rohit Mehra",
-        "vehicle": "Maruti Suzuki Swift VXi",
-        "vehicle_class": "four_wheeler",
-        "plan": "Zero-Dep Bumper-to-Bumper",
-        "zero_depreciation": true,
-        "idv_inr": 520000,
-        "compulsory_deductible_inr": 1000,
-        "line_items": [
-          {
-            "part": "bumper",
-            "display_en": "Front/rear bumper dent",
-            "genuine_cost_low": 2800,
-            "genuine_cost_high": 4200,
-            "depreciation_pct_applied": 0.0,
-            "allowable_low": 2800,
-            "allowable_high": 4200
-          },
-          {
-            "part": "radiator",
-            "display_en": "Radiator burst / coolant leak",
-            "genuine_cost_low": 10500,
-            "genuine_cost_high": 12800,
-            "depreciation_pct_applied": 0.0,
-            "allowable_low": 10500,
-            "allowable_high": 12800
-          }
-        ],
-        "estimated_repair_low_inr": 12300,
-        "estimated_repair_high_inr": 16000,
-        "estimated_range_display": "₹12,300 se ₹16,000",
-        "status_label": "Estimated Range Subject to Surveyor Inspection — Not Final Approval",
-        "status_label_spoken_hi": "Yeh anumaanit range hai — aantim rashi sirf surveyor aur nireeksh ke baad.",
-        "photos_required": 4,
-        "age_of_vehicle_years": 2.0
-      },
-      "stage": "confirm"
-    },
-    "ticket_status": "CONFIRM_PENDING",
-    "reply": "Shukar hai aap safe hain! Kyunki bumper damage hai, kripya gaadi start mat kijiye. Policy 7820 ke tahat Karnal Motors Pvt Ltd se FREE flatbed tow truck bhej rahe hain, aur 1033 highway patrol safety cones bhi laga raha hai, aur ₹12,300 se ₹16,000 ka claim draft taiyaar hai. Kya main confirm kar doon?"
-  },
-  {
-    "call_id": "t-cb-bhaiya madad",
-    "at": 1794288596.861792,
-    "stage": "done",
-    "transcript": "bhaiya madad chahiye, activa ki battery khatam ho gayi aur ek puncture bhi ho gaya hai, delhi mein khadi hai, policy number 4491 hai",
-    "entities": {
-      "parts": [
-        "battery",
-        "fuel_out",
-        "puncture"
-      ],
-      "policy_number": "4491",
-      "road_type": "CITY",
-      "road_explicit": true,
-      "is_drivable": true,
-      "drivable_reason": "no visible damage / drivable",
-      "injured": false,
-      "confirm_intent": "correct",
-      "last_dispatch": {
-        "tool": "dispatch_smart_rsa",
-        "road_type": "CITY",
-        "vehicle_class": "two_wheeler",
-        "policy_number": "4491",
-        "parts": [
-          "battery",
-          "fuel_out",
-          "puncture"
-        ],
-        "timestamp_utc": "2026-11-10T05:29:56.861763+00:00",
-        "workflow": "A",
-        "workflow_label": "Workflow A — Minor Breakdown (NCB Saver)",
-        "dispatch_vendor": "On-Spot 2-Wheeler Bike Mechanic",
-        "dispatch_vendor_type": "on_spot_bike_mechanic",
-        "eta_mins": 22,
-        "ncb_protected": true,
-        "do_not_claim_warning": "Ye chhoti si service RSA se FREE ho jayegi aur aapka 20% No-Claim Bonus bhi salamat rahega — isliye insurance claim FILE MAT kijiye!",
-        "do_not_claim_spoken_hi": "Sahi news! Ye chota breakdown hai. Bike mechanic sirf 22 minute mein aayega aur service bilkul FREE hogi. Sabse badi baat — aapke 20 percent No-Claim Bonus salamat rahenge, isliye claim file bilkul mat kijiye."
-      },
-      "last_road_type": "CITY",
-      "last_parts": [
-        "battery",
-        "fuel_out",
-        "puncture"
-      ],
-      "last_drivable": true,
-      "stage": "done"
-    },
-    "ticket_status": "✅ RSA DISPATCHED — NO CLAIM FILED (NCB PROTECTED)",
-    "reply": "Shukar hai aap safe hain! Battery to chhoti si baat hai — tension mat lijiye, gaadi chalane layak hai. Main 22 minute mein on-spot mechanic bhej rahi hoon, service RSA se bilkul FREE hai, aur claim file nahi karne se aapka 20 percent No-Claim Bonus salamat rahega — dispatch ho gaya ji."
-  },
-  {
-    "call_id": "t-cb-gaon ki link",
-    "at": 1794288596.869097,
-    "stage": "confirm",
-    "transcript": "gaon ki link road par hamari bolero ka axle twist ho gaya hai, gaadi chal nahi sakti, tow bhej do, policy number 9932 hai",
-    "entities": {
-      "parts": [
-        "axle"
-      ],
-      "policy_number": "9932",
-      "road_type": "RURAL",
-      "road_explicit": true,
-      "is_drivable": false,
-      "drivable_reason": "Axle / suspension bent",
-      "injured": false,
-      "confirm_intent": "correct",
-      "last_dispatch": {
-        "tool": "dispatch_smart_rsa",
-        "road_type": "RURAL",
-        "vehicle_class": "four_wheeler",
-        "policy_number": "9932",
-        "parts": [
-          "axle"
-        ],
-        "timestamp_utc": "2026-11-10T05:29:56.869056+00:00",
-        "workflow": "B",
-        "workflow_label": "Workflow B — Non-Drivable Crash",
-        "do_not_start_engine": true,
-        "engine_warning": "🔴 Do NOT Start Engine! (radiator/axle/coolant damage risk)",
-        "engine_warning_spoken_hi": "Kripya gaadi start bilkul MAT kijiye — engine kekk ho sakta hai.",
-        "dispatch_vendor": "Free RSA Flatbed Tow Truck (up to 50 km)",
-        "dispatch_vendor_type": "flatbed_tow_truck",
-        "eta_mins": 38,
-        "free_tow_km_limit": 50,
-        "destination_garage": {
-          "id": "g_rural_karnal_link",
-          "name": "Karnal Link Road Workshop (Reimb. Only)",
-          "city": "Karnal Rural",
-          "road_type": "RURAL",
-          "highway": "Karnal-Assandh Link Road",
-          "km_marker": null,
-          "cashless": false,
-          "network": "REIMBURSEMENT-ONLY",
-          "services_2w": true,
-          "services_ev": false,
-          "phone": "090-SYN-006"
-        },
-        "nhai_patrol_alerted": false,
-        "nhai_patrol_detail": null,
-        "rural_reimbursement": {
-          "eligible": true,
-          "reason": "Rural link road: nearest workshop ETA > 2 hours",
-          "amount_inr": 1500,
-          "authority": "IRDAI local crane/towing reimbursement authorization ₹1,500"
-        },
-        "ncb_protected": false,
-        "photos_note": "To invoice/rash record for surveyor: 4 photos with number plate visible."
-      },
-      "last_road_type": "RURAL",
-      "last_parts": [
-        "axle"
-      ],
-      "last_drivable": false,
-      "last_draft": {
-        "tool": "calculate_irdai_claim_draft",
-        "claim_id": "FNOL-15AAE6EF",
-        "policy_number": "9932",
-        "owner": "Gurpreet Singh",
-        "vehicle": "Mahindra Bolero Standard",
-        "vehicle_class": "four_wheeler",
-        "plan": "Commercial Utility Standard",
-        "zero_depreciation": false,
-        "idv_inr": 610000,
-        "compulsory_deductible_inr": 1000,
-        "line_items": [
-          {
-            "part": "axle",
-            "display_en": "Axle / suspension bent",
-            "genuine_cost_low": 8900,
-            "genuine_cost_high": 12400,
-            "depreciation_pct_applied": 35,
-            "allowable_low": 5785,
-            "allowable_high": 8060
-          }
-        ],
-        "estimated_repair_low_inr": 4785,
-        "estimated_repair_high_inr": 7060,
-        "estimated_range_display": "₹4,785 se ₹7,060",
-        "status_label": "Estimated Range Subject to Surveyor Inspection — Not Final Approval",
-        "status_label_spoken_hi": "Yeh anumaanit range hai — aantim rashi sirf surveyor aur nireeksh ke baad.",
-        "photos_required": 4,
-        "age_of_vehicle_years": 2.0
-      },
-      "stage": "confirm"
-    },
-    "ticket_status": "CONFIRM_PENDING",
-    "reply": "Shukar hai aap safe hain! Kyunki axle damage hai, kripya gaadi start mat kijiye. Policy 9932 ke tahat aapke sabse nazdik workshop 2 ghante se zyada dur hai, isliye I.R.D.A.I. niyam se ₹1500 ka local towing reimbursement authorize kar raha hoon — matlab local crane bhi ho jayega. Kya main confirm kar doon?"
-  },
-  {
-    "call_id": "t-cb-accident ho ",
-    "at": 1794288596.8763,
-    "stage": "emergency_handoff",
-    "transcript": "accident ho gaya hai bhaisahab, sar mein chot lag gayi hai khoon nikal raha hai, mera co-driver behosh hai, ambulance chahiye",
-    "entities": {
-      "parts": [],
-      "policy_number": null,
-      "road_type": null,
-      "road_explicit": false,
-      "is_drivable": true,
-      "drivable_reason": "no visible damage / drivable",
-      "injured": true,
-      "confirm_intent": "none",
-      "stage": "emergency_handoff",
-      "emergency_calls": [
-        {
-          "line": "112",
-          "label": "🚨 112 AMBULANCE DISPATCHED"
-        },
-        {
-          "line": "112-POLICE",
-          "label": "👮 112 POLICE DISPATCHED"
-        }
-      ]
-    },
-    "ticket_status": "EMERGENCY — 112 AMBULANCE & POLICE DISPATCHED",
-    "reply": "Aapki jaan sabse pehle hai — main turant 112 ambulance aur 112 police bhej rahi hoon, kripya phone na kaatein. Ek emergency officer aapko directly connect kar rahi hoon. Gaadi mein baithe rahein, helmet/halki awaz mein rahiye."
-  },
-  {
-    "call_id": "mt-test",
-    "at": 1794288596.924899,
-    "stage": "confirm",
-    "transcript": "hello helpline ji, NH-44 highway par major crash ho gaya hai, radiator phat gaya hai aur coolant nikal raha hai, bumper mein dant bhi aa gaya hai, mera policy number 7820 hai",
-    "entities": {
-      "parts": [
-        "bumper",
-        "radiator"
-      ],
-      "policy_number": "7820",
-      "road_type": "NH",
-      "road_explicit": true,
-      "is_drivable": false,
-      "drivable_reason": "Radiator burst / coolant leak",
-      "injured": false,
-      "confirm_intent": "correct",
-      "last_dispatch": {
-        "tool": "dispatch_smart_rsa",
-        "road_type": "NH",
-        "vehicle_class": "four_wheeler",
-        "policy_number": "7820",
-        "parts": [
-          "bumper",
-          "radiator"
-        ],
-        "timestamp_utc": "2026-11-10T05:29:56.924856+00:00",
-        "workflow": "B",
-        "workflow_label": "Workflow B — Non-Drivable Crash",
-        "do_not_start_engine": true,
-        "engine_warning": "🔴 Do NOT Start Engine! (radiator/axle/coolant damage risk)",
-        "engine_warning_spoken_hi": "Kripya gaadi start bilkul MAT kijiye — engine kekk ho sakta hai.",
-        "dispatch_vendor": "Free RSA Flatbed Tow Truck (up to 50 km)",
-        "dispatch_vendor_type": "flatbed_tow_truck",
-        "eta_mins": 38,
-        "free_tow_km_limit": 50,
-        "destination_garage": {
-          "id": "g_karnal_motors",
-          "name": "Karnal Motors Pvt Ltd",
-          "city": "Karnal",
-          "road_type": "NH",
-          "highway": "NH-44",
-          "km_marker": "126",
-          "cashless": true,
-          "network": "MDRT-CASHLESS-NET",
-          "services_2w": false,
-          "services_ev": false,
-          "phone": "090-SYN-001"
-        },
-        "nhai_patrol_alerted": true,
-        "nhai_patrol_detail": "1033 NHAI Highway Patrol — fast-lane safety cones requested",
-        "rural_reimbursement": null,
-        "ncb_protected": false,
-        "photos_note": "To invoice/rash record for surveyor: 4 photos with number plate visible."
-      },
-      "last_road_type": "NH",
-      "last_parts": [
-        "bumper",
-        "radiator"
-      ],
-      "last_drivable": false,
-      "last_draft": {
-        "tool": "calculate_irdai_claim_draft",
-        "claim_id": "FNOL-8115257D",
-        "policy_number": "7820",
-        "owner": "Rohit Mehra",
-        "vehicle": "Maruti Suzuki Swift VXi",
-        "vehicle_class": "four_wheeler",
-        "plan": "Zero-Dep Bumper-to-Bumper",
-        "zero_depreciation": true,
-        "idv_inr": 520000,
-        "compulsory_deductible_inr": 1000,
-        "line_items": [
-          {
-            "part": "bumper",
-            "display_en": "Front/rear bumper dent",
-            "genuine_cost_low": 2800,
-            "genuine_cost_high": 4200,
-            "depreciation_pct_applied": 0.0,
-            "allowable_low": 2800,
-            "allowable_high": 4200
-          },
-          {
-            "part": "radiator",
-            "display_en": "Radiator burst / coolant leak",
-            "genuine_cost_low": 10500,
-            "genuine_cost_high": 12800,
-            "depreciation_pct_applied": 0.0,
-            "allowable_low": 10500,
-            "allowable_high": 12800
-          }
-        ],
-        "estimated_repair_low_inr": 12300,
-        "estimated_repair_high_inr": 16000,
-        "estimated_range_display": "₹12,300 se ₹16,000",
-        "status_label": "Estimated Range Subject to Surveyor Inspection — Not Final Approval",
-        "status_label_spoken_hi": "Yeh anumaanit range hai — aantim rashi sirf surveyor aur nireeksh ke baad.",
-        "photos_required": 4,
-        "age_of_vehicle_years": 2.0
-      },
-      "stage": "confirm"
-    },
-    "ticket_status": "CONFIRM_PENDING",
-    "reply": "Shukar hai aap safe hain! Kyunki bumper damage hai, kripya gaadi start mat kijiye. Policy 7820 ke tahat Karnal Motors Pvt Ltd se FREE flatbed tow truck bhej rahe hain, aur 1033 highway patrol safety cones bhi laga raha hai, aur ₹12,300 se ₹16,000 ka claim draft taiyaar hai. Kya main confirm kar doon?"
-  },
-  {
-    "call_id": "mt-test",
-    "at": 1794288596.932395,
-    "stage": "confirm",
-    "transcript": "ruko, policy number saat hazaar aath sau bees nahi, chaar hazaar chaar sau ikyaanave hai",
-    "entities": {
-      "parts": [
-        "bumper",
-        "radiator"
-      ],
-      "policy_number": "4491",
-      "road_type": "NH",
-      "road_explicit": true,
-      "is_drivable": false,
-      "drivable_reason": "Radiator burst / coolant leak",
-      "injured": false,
-      "confirm_intent": "correct",
-      "last_dispatch": {
-        "tool": "dispatch_smart_rsa",
-        "road_type": "NH",
-        "vehicle_class": "two_wheeler",
-        "policy_number": "4491",
-        "parts": [
-          "bumper",
-          "radiator"
-        ],
-        "timestamp_utc": "2026-11-10T05:29:56.932270+00:00",
-        "workflow": "B",
-        "workflow_label": "Workflow B — Non-Drivable Crash",
-        "do_not_start_engine": true,
-        "engine_warning": "🔴 Do NOT Start Engine! (radiator/axle/coolant damage risk)",
-        "engine_warning_spoken_hi": "Kripya gaadi start bilkul MAT kijiye — engine kekk ho sakta hai.",
-        "dispatch_vendor": "Free RSA Flatbed Tow Truck (up to 50 km)",
-        "dispatch_vendor_type": "flatbed_tow_truck",
-        "eta_mins": 38,
-        "free_tow_km_limit": 50,
-        "destination_garage": {
-          "id": "g_karnal_motors",
-          "name": "Karnal Motors Pvt Ltd",
-          "city": "Karnal",
-          "road_type": "NH",
-          "highway": "NH-44",
-          "km_marker": "126",
-          "cashless": true,
-          "network": "MDRT-CASHLESS-NET",
-          "services_2w": false,
-          "services_ev": false,
-          "phone": "090-SYN-001"
-        },
-        "nhai_patrol_alerted": true,
-        "nhai_patrol_detail": "1033 NHAI Highway Patrol — fast-lane safety cones requested",
-        "rural_reimbursement": null,
-        "ncb_protected": false,
-        "photos_note": "To invoice/rash record for surveyor: 4 photos with number plate visible."
-      },
-      "last_road_type": "NH",
-      "last_parts": [
-        "bumper",
-        "radiator"
-      ],
-      "last_drivable": false,
-      "last_draft": {
-        "tool": "calculate_irdai_claim_draft",
-        "claim_id": "FNOL-9FF9F467",
-        "policy_number": "4491",
-        "owner": "Anjali Sharma",
-        "vehicle": "Honda Activa 6G",
-        "vehicle_class": "two_wheeler",
-        "plan": "Zero-Dep Scooter Shield",
-        "zero_depreciation": true,
-        "idv_inr": 78000,
-        "compulsory_deductible_inr": 100,
-        "line_items": [
-          {
-            "part": "bumper",
-            "display_en": "Front/rear bumper dent",
-            "genuine_cost_low": 2800,
-            "genuine_cost_high": 4200,
-            "depreciation_pct_applied": 0.0,
-            "allowable_low": 2800,
-            "allowable_high": 4200
-          },
-          {
-            "part": "radiator",
-            "display_en": "Radiator burst / coolant leak",
-            "genuine_cost_low": 10500,
-            "genuine_cost_high": 12800,
-            "depreciation_pct_applied": 0.0,
-            "allowable_low": 10500,
-            "allowable_high": 12800
-          }
-        ],
-        "estimated_repair_low_inr": 13200,
-        "estimated_repair_high_inr": 16900,
-        "estimated_range_display": "₹13,200 se ₹16,900",
-        "status_label": "Estimated Range Subject to Surveyor Inspection — Not Final Approval",
-        "status_label_spoken_hi": "Yeh anumaanit range hai — aantim rashi sirf surveyor aur nireeksh ke baad.",
-        "photos_required": 4,
-        "age_of_vehicle_years": 2.0
-      },
-      "stage": "confirm"
-    },
-    "ticket_status": "CONFIRM_PENDING (corrected)",
-    "reply": "Achha, aage badhte hain. Kyunki bumper damage hai, kripya gaadi start mat kijiye. Policy 4491 ke tahat Karnal Motors Pvt Ltd se FREE flatbed tow truck bhej rahe hain, aur 1033 highway patrol safety cones bhi laga raha hai, aur ₹13,200 se ₹16,900 ka claim draft taiyaar hai. Kya main confirm kar doon?"
-  },
-  {
-    "call_id": "mt-test",
-    "at": 1794288596.939616,
-    "stage": "done",
-    "transcript": "haan confirm kar do, theek hai",
-    "entities": {
-      "parts": [
-        "bumper",
-        "radiator"
-      ],
-      "policy_number": "4491",
-      "road_type": "NH",
-      "road_explicit": true,
-      "is_drivable": false,
-      "drivable_reason": "Radiator burst / coolant leak",
-      "injured": false,
-      "confirm_intent": "confirm",
-      "last_dispatch": {
-        "tool": "dispatch_smart_rsa",
-        "road_type": "NH",
-        "vehicle_class": "two_wheeler",
-        "policy_number": "4491",
-        "parts": [
-          "bumper",
-          "radiator"
-        ],
-        "timestamp_utc": "2026-11-10T05:29:56.932270+00:00",
-        "workflow": "B",
-        "workflow_label": "Workflow B — Non-Drivable Crash",
-        "do_not_start_engine": true,
-        "engine_warning": "🔴 Do NOT Start Engine! (radiator/axle/coolant damage risk)",
-        "engine_warning_spoken_hi": "Kripya gaadi start bilkul MAT kijiye — engine kekk ho sakta hai.",
-        "dispatch_vendor": "Free RSA Flatbed Tow Truck (up to 50 km)",
-        "dispatch_vendor_type": "flatbed_tow_truck",
-        "eta_mins": 38,
-        "free_tow_km_limit": 50,
-        "destination_garage": {
-          "id": "g_karnal_motors",
-          "name": "Karnal Motors Pvt Ltd",
-          "city": "Karnal",
-          "road_type": "NH",
-          "highway": "NH-44",
-          "km_marker": "126",
-          "cashless": true,
-          "network": "MDRT-CASHLESS-NET",
-          "services_2w": false,
-          "services_ev": false,
-          "phone": "090-SYN-001"
-        },
-        "nhai_patrol_alerted": true,
-        "nhai_patrol_detail": "1033 NHAI Highway Patrol — fast-lane safety cones requested",
-        "rural_reimbursement": null,
-        "ncb_protected": false,
-        "photos_note": "To invoice/rash record for surveyor: 4 photos with number plate visible."
-      },
-      "last_road_type": "NH",
-      "last_parts": [
-        "bumper",
-        "radiator"
-      ],
-      "last_drivable": false,
-      "last_draft": {
-        "tool": "calculate_irdai_claim_draft",
-        "claim_id": "FNOL-9FF9F467",
-        "policy_number": "4491",
-        "owner": "Anjali Sharma",
-        "vehicle": "Honda Activa 6G",
-        "vehicle_class": "two_wheeler",
-        "plan": "Zero-Dep Scooter Shield",
-        "zero_depreciation": true,
-        "idv_inr": 78000,
-        "compulsory_deductible_inr": 100,
-        "line_items": [
-          {
-            "part": "bumper",
-            "display_en": "Front/rear bumper dent",
-            "genuine_cost_low": 2800,
-            "genuine_cost_high": 4200,
-            "depreciation_pct_applied": 0.0,
-            "allowable_low": 2800,
-            "allowable_high": 4200
-          },
-          {
-            "part": "radiator",
-            "display_en": "Radiator burst / coolant leak",
-            "genuine_cost_low": 10500,
-            "genuine_cost_high": 12800,
-            "depreciation_pct_applied": 0.0,
-            "allowable_low": 10500,
-            "allowable_high": 12800
-          }
-        ],
-        "estimated_repair_low_inr": 13200,
-        "estimated_repair_high_inr": 16900,
-        "estimated_range_display": "₹13,200 se ₹16,900",
-        "status_label": "Estimated Range Subject to Surveyor Inspection — Not Final Approval",
-        "status_label_spoken_hi": "Yeh anumaanit range hai — aantim rashi sirf surveyor aur nireeksh ke baad.",
-        "photos_required": 4,
-        "age_of_vehicle_years": 2.0
-      },
-      "stage": "done"
-    },
-    "ticket_status": "✅ APPLIED & DISPATCHED",
-    "reply": "Confirm ho gaya ji — aapka insurance claim APPLY ho gaya aur roadside help DISPATCH ho gaya hai. Aapka RSA ticket aur FNOL claim card dono lock ho chuke hain. Help lagbhag 38 minute mein aayega. Aap chinta mat kijiye, hum hain na? Safe rahiye ji"
-  },
-  {
     "call_id": "no-llm-test",
     "at": 1794288596.947469,
     "stage": "confirm",
@@ -11388,5 +10542,730 @@
     },
     "ticket_status": "✅ RSA DISPATCHED — NO CLAIM FILED (NCB PROTECTED)",
     "reply": "Dispatch already ho gaya ji — mechanic 22 minute mein pahunch raha hai. Claim file karne ki zaroorat nahi, aapka No-Claim Bonus safe hai."
+  },
+  {
+    "call_id": "call-de95403f",
+    "at": 1794322078.03776,
+    "stage": "incident",
+    "language": "hi-IN",
+    "transcript": "हम सब safe हैं भाई, किसी को चोट नहीं लगी।",
+    "entities": {
+      "language": "hi-IN",
+      "call_started": true,
+      "stage": "incident",
+      "interrupted_agent_text": "Namaste! Main BimaVani Roadside Helpline se bol rahi hoon. Sabse pehle batayein—kya aap aur gaadi mein baithe sabhi log safe hain, ya kisi ko chot lagi hai?",
+      "interruption_log": [
+        {
+          "tag": "[interrupted]",
+          "at": 1794322075.8113139,
+          "source": "server_vad_mic",
+          "agent_cut": "Namaste! Main BimaVani Roadside Helpline se bol rahi hoon. Sabse pehle batayein—kya aap aur gaadi mein baithe sabhi log safe hain, ya kisi ko chot lagi hai?",
+          "mic_dump": "[interrupted] সেই তো।",
+          "raw_transcript": "সেই তো।",
+          "audio_stats": {
+            "duration_ms": 320.0,
+            "peak_dbfs": -23.3,
+            "jitter_ms_est": 27.8
+          }
+        }
+      ],
+      "last_interruption": {
+        "tag": "[interrupted]",
+        "at": 1794322075.8113139,
+        "source": "server_vad_mic",
+        "agent_cut": "Namaste! Main BimaVani Roadside Helpline se bol rahi hoon. Sabse pehle batayein—kya aap aur gaadi mein baithe sabhi log safe hain, ya kisi ko chot lagi hai?",
+        "mic_dump": "[interrupted] সেই তো।",
+        "raw_transcript": "সেই তো।",
+        "audio_stats": {
+          "duration_ms": 320.0,
+          "peak_dbfs": -23.3,
+          "jitter_ms_est": 27.8
+        }
+      },
+      "was_interrupted": false,
+      "policy_number": null,
+      "road_type": null,
+      "road_explicit": false,
+      "parts": [],
+      "is_drivable": true,
+      "drivable_reason": "no visible damage / drivable",
+      "injured": false,
+      "confirm_intent": "none"
+    },
+    "ticket_status": "STAGE 2 — INCIDENT DETAILS IN PROGRESS",
+    "reply": "Bahut shukriya ji — aap sab safe hain, yahi sabse badi baat hai. Ab bataiye, gaadi ko kya hua?"
+  },
+  {
+    "call_id": "call-9ec84d7a",
+    "at": 1794322404.667016,
+    "stage": "emergency_handoff",
+    "language": "pa-IN",
+    "transcript": "ਮੈਂ ਚੋਟ ਲੱਗ ਗਈ, ਟਾਂਗ ਟੁੱਟ ਗਈ, madam ਗੋਲੀ ਚੱਲ ਗਈ।",
+    "entities": {
+      "language": "pa-IN",
+      "call_started": true,
+      "stage": "emergency_handoff",
+      "interrupted_agent_text": "Namaste! Main BimaVani Roadside Helpline se bol rahi hoon. Sabse pehle batayein—kya aap aur gaadi mein baithe sabhi log safe hain, ya kisi ko chot lagi hai?",
+      "interruption_log": [
+        {
+          "tag": "[interrupted]",
+          "at": 1794322401.120974,
+          "source": "server_vad_mic",
+          "agent_cut": "Namaste! Main BimaVani Roadside Helpline se bol rahi hoon. Sabse pehle batayein—kya aap aur gaadi mein baithe sabhi log safe hain, ya kisi ko chot lagi hai?",
+          "mic_dump": "[interrupted] ਅੱਗੇ।",
+          "raw_transcript": "ਅੱਗੇ।",
+          "audio_stats": {
+            "duration_ms": 320.0,
+            "peak_dbfs": -28.5,
+            "jitter_ms_est": 33.0
+          }
+        }
+      ],
+      "last_interruption": {
+        "tag": "[interrupted]",
+        "at": 1794322401.120974,
+        "source": "server_vad_mic",
+        "agent_cut": "Namaste! Main BimaVani Roadside Helpline se bol rahi hoon. Sabse pehle batayein—kya aap aur gaadi mein baithe sabhi log safe hain, ya kisi ko chot lagi hai?",
+        "mic_dump": "[interrupted] ਅੱਗੇ।",
+        "raw_transcript": "ਅੱਗੇ।",
+        "audio_stats": {
+          "duration_ms": 320.0,
+          "peak_dbfs": -28.5,
+          "jitter_ms_est": 33.0
+        }
+      },
+      "was_interrupted": false,
+      "policy_number": null,
+      "road_type": null,
+      "road_explicit": false,
+      "parts": [],
+      "is_drivable": true,
+      "drivable_reason": "no visible damage / drivable",
+      "injured": true,
+      "confirm_intent": "none",
+      "emergency_calls": [
+        {
+          "line": "112",
+          "label": "🚨 112 AMBULANCE DISPATCHED"
+        },
+        {
+          "line": "112-POLICE",
+          "label": "👮 112 POLICE DISPATCHED"
+        }
+      ]
+    },
+    "ticket_status": "EMERGENCY — 112 AMBULANCE & POLICE DISPATCHED",
+    "reply": "ਤੁਹਾਡੀ ਸੁਰੱਖਿਆ ਸਭ ਤੋਂ ਪਹਿਲਾਂ ਹੈ — ਮੈਂ ਤੁਰੰਤ 112 ਐਂਬੂਲੈਂਸ ਅਤੇ 112 ਪੁਲਿਸ ਭੇਜ ਰਹੀ ਹਾਂ, ਕਿਰਪਾ ਕਰਕੇ ਫ਼ੋਨ ਨਾ ਕੱਟੋ। ਮੈਂ ਤੁਹਾਨੂੰ ਸਿੱਧੇ ਐਮਰਜੈਂਸੀ ਅਧਿਕਾਰੀ ਨਾਲ ਜੋੜ ਰਹੀ ਹਾਂ. ਸੁਰੱਖਿਅਤ ਥਾਂ 'ਤੇ ਰਹੋ, ਲਾਈਨ 'ਤੇ ਬਣੇ ਰਹੋ।"
+  },
+  {
+    "call_id": "call-9ec84d7a",
+    "at": 1794322433.310688,
+    "stage": "emergency_handoff",
+    "language": "hi-IN",
+    "transcript": "अरे भाई, सुनिए फटाफट। actually एक काम करें, फटाफट एक काम ambulance से बुला दो। एक काम कर, फटाफट insurance भर दे भाई मेरा।",
+    "entities": {
+      "language": "hi-IN",
+      "call_started": true,
+      "stage": "emergency_handoff",
+      "interrupted_agent_text": "ਤੁਹਾਡੀ ਸੁਰੱਖਿਆ ਸਭ ਤੋਂ ਪਹਿਲਾਂ ਹੈ — ਮੈਂ ਤੁਰੰਤ 112 ਐਂਬੂਲੈਂਸ ਅਤੇ 112 ਪੁਲਿਸ ਭੇਜ ਰਹੀ ਹਾਂ, ਕਿਰਪਾ ਕਰਕੇ ਫ਼ੋਨ ਨਾ ਕੱਟੋ। ਮੈਂ ਤੁਹਾਨੂੰ ਸਿੱਧੇ ਐਮਰਜੈਂਸੀ ਅਧਿਕਾਰੀ ਨਾਲ ਜੋੜ ਰਹੀ ਹਾਂ. ਸੁਰੱਖਿਅਤ ਥਾਂ 'ਤੇ ਰਹੋ, ਲਾਈਨ 'ਤੇ ਬਣੇ ਰਹੋ।",
+      "interruption_log": [
+        {
+          "tag": "[interrupted]",
+          "at": 1794322401.120974,
+          "source": "server_vad_mic",
+          "agent_cut": "Namaste! Main BimaVani Roadside Helpline se bol rahi hoon. Sabse pehle batayein—kya aap aur gaadi mein baithe sabhi log safe hain, ya kisi ko chot lagi hai?",
+          "mic_dump": "[interrupted] ਅੱਗੇ।",
+          "raw_transcript": "ਅੱਗੇ।",
+          "audio_stats": {
+            "duration_ms": 320.0,
+            "peak_dbfs": -28.5,
+            "jitter_ms_est": 33.0
+          }
+        },
+        {
+          "tag": "[interrupted]",
+          "at": 1794322425.641767,
+          "source": "server_vad_mic",
+          "agent_cut": "ਤੁਹਾਡੀ ਸੁਰੱਖਿਆ ਸਭ ਤੋਂ ਪਹਿਲਾਂ ਹੈ — ਮੈਂ ਤੁਰੰਤ 112 ਐਂਬੂਲੈਂਸ ਅਤੇ 112 ਪੁਲਿਸ ਭੇਜ ਰਹੀ ਹਾਂ, ਕਿਰਪਾ ਕਰਕੇ ਫ਼ੋਨ ਨਾ ਕੱਟੋ। ਮੈਂ ਤੁਹਾਨੂੰ ਸਿੱਧੇ ਐਮਰਜੈਂਸੀ ਅਧਿਕਾਰੀ ਨਾਲ ਜੋੜ ਰਹੀ ਹਾਂ. ਸੁਰੱਖਿਅਤ ਥਾਂ 'ਤੇ ਰਹੋ, ਲਾਈਨ 'ਤੇ ਬਣੇ ਰਹੋ।",
+          "mic_dump": "[interrupted] आगे टांग टूट गई, madam। गोली चल गई।",
+          "raw_transcript": "आगे टांग टूट गई, madam। गोली चल गई।",
+          "audio_stats": {
+            "duration_ms": 3160.0,
+            "peak_dbfs": -25.8,
+            "jitter_ms_est": 27.0
+          }
+        }
+      ],
+      "last_interruption": {
+        "tag": "[interrupted]",
+        "at": 1794322425.641767,
+        "source": "server_vad_mic",
+        "agent_cut": "ਤੁਹਾਡੀ ਸੁਰੱਖਿਆ ਸਭ ਤੋਂ ਪਹਿਲਾਂ ਹੈ — ਮੈਂ ਤੁਰੰਤ 112 ਐਂਬੂਲੈਂਸ ਅਤੇ 112 ਪੁਲਿਸ ਭੇਜ ਰਹੀ ਹਾਂ, ਕਿਰਪਾ ਕਰਕੇ ਫ਼ੋਨ ਨਾ ਕੱਟੋ। ਮੈਂ ਤੁਹਾਨੂੰ ਸਿੱਧੇ ਐਮਰਜੈਂਸੀ ਅਧਿਕਾਰੀ ਨਾਲ ਜੋੜ ਰਹੀ ਹਾਂ. ਸੁਰੱਖਿਅਤ ਥਾਂ 'ਤੇ ਰਹੋ, ਲਾਈਨ 'ਤੇ ਬਣੇ ਰਹੋ।",
+        "mic_dump": "[interrupted] आगे टांग टूट गई, madam। गोली चल गई।",
+        "raw_transcript": "आगे टांग टूट गई, madam। गोली चल गई।",
+        "audio_stats": {
+          "duration_ms": 3160.0,
+          "peak_dbfs": -25.8,
+          "jitter_ms_est": 27.0
+        }
+      },
+      "was_interrupted": false,
+      "policy_number": null,
+      "road_type": null,
+      "road_explicit": false,
+      "parts": [],
+      "is_drivable": true,
+      "drivable_reason": "no visible damage / drivable",
+      "injured": true,
+      "confirm_intent": "none",
+      "emergency_calls": [
+        {
+          "line": "112",
+          "label": "🚨 112 AMBULANCE DISPATCHED"
+        },
+        {
+          "line": "112-POLICE",
+          "label": "👮 112 POLICE DISPATCHED"
+        }
+      ]
+    },
+    "ticket_status": "EMERGENCY — 112 AMBULANCE & POLICE DISPATCHED",
+    "reply": "Aapki jaan sabse pehle hai — main turant 112 ambulance aur 112 police bhej rahi hoon, kripya phone na kaatein. Ek emergency officer aapko directly connect kar rahi hoon. Surakshit jagah par rahein, line par bane rahiye."
+  },
+  {
+    "call_id": "call-9ec84d7a",
+    "at": 1794322452.1670778,
+    "stage": "emergency_handoff",
+    "language": "hi-IN",
+    "transcript": "ठीक है, ठीक है, भेज दे। पुलिस को भेज दे। पर एक काम कर, मुझे फटाफट एक... ये एक काम कर, मुझे कोई... मेरे गाड़ी का tyre puncture हो गया। फटाफट एक mechanic भेज दे, फटाफट tyre लगवा के भाग जाऊंगा। भाग जाऊंगा इतना।",
+    "entities": {
+      "language": "hi-IN",
+      "call_started": true,
+      "stage": "emergency_handoff",
+      "interrupted_agent_text": "Aapki jaan sabse pehle hai — main turant 112 ambulance aur 112 police bhej rahi hoon, kripya phone na kaatein. Ek emergency officer aapko directly connect kar rahi hoon. Surakshit jagah par rahein, line par bane rahiye.",
+      "interruption_log": [
+        {
+          "tag": "[interrupted]",
+          "at": 1794322401.120974,
+          "source": "server_vad_mic",
+          "agent_cut": "Namaste! Main BimaVani Roadside Helpline se bol rahi hoon. Sabse pehle batayein—kya aap aur gaadi mein baithe sabhi log safe hain, ya kisi ko chot lagi hai?",
+          "mic_dump": "[interrupted] ਅੱਗੇ।",
+          "raw_transcript": "ਅੱਗੇ।",
+          "audio_stats": {
+            "duration_ms": 320.0,
+            "peak_dbfs": -28.5,
+            "jitter_ms_est": 33.0
+          }
+        },
+        {
+          "tag": "[interrupted]",
+          "at": 1794322425.641767,
+          "source": "server_vad_mic",
+          "agent_cut": "ਤੁਹਾਡੀ ਸੁਰੱਖਿਆ ਸਭ ਤੋਂ ਪਹਿਲਾਂ ਹੈ — ਮੈਂ ਤੁਰੰਤ 112 ਐਂਬੂਲੈਂਸ ਅਤੇ 112 ਪੁਲਿਸ ਭੇਜ ਰਹੀ ਹਾਂ, ਕਿਰਪਾ ਕਰਕੇ ਫ਼ੋਨ ਨਾ ਕੱਟੋ। ਮੈਂ ਤੁਹਾਨੂੰ ਸਿੱਧੇ ਐਮਰਜੈਂਸੀ ਅਧਿਕਾਰੀ ਨਾਲ ਜੋੜ ਰਹੀ ਹਾਂ. ਸੁਰੱਖਿਅਤ ਥਾਂ 'ਤੇ ਰਹੋ, ਲਾਈਨ 'ਤੇ ਬਣੇ ਰਹੋ।",
+          "mic_dump": "[interrupted] आगे टांग टूट गई, madam। गोली चल गई।",
+          "raw_transcript": "आगे टांग टूट गई, madam। गोली चल गई।",
+          "audio_stats": {
+            "duration_ms": 3160.0,
+            "peak_dbfs": -25.8,
+            "jitter_ms_est": 27.0
+          }
+        },
+        {
+          "tag": "[interrupted]",
+          "at": 1794322439.564319,
+          "source": "auto_vad_mic",
+          "agent_cut": "Aapki jaan sabse pehle hai — main turant 112 ambulance aur 112 police bhej rahi hoon, kripya phone na kaatein. Ek emergency officer aapko directly connect kar rahi hoon. Surakshit jagah par rahein, line par bane rahiye.",
+          "mic_dump": "[interrupted] (mic activity detected — 500.0ms speech dumped at -20.0 dBFS)",
+          "raw_transcript": "",
+          "audio_stats": {
+            "duration_ms": 500.0,
+            "peak_dbfs": -20.0,
+            "jitter_ms_est": 27.5
+          }
+        }
+      ],
+      "last_interruption": {
+        "tag": "[interrupted]",
+        "at": 1794322439.564319,
+        "source": "auto_vad_mic",
+        "agent_cut": "Aapki jaan sabse pehle hai — main turant 112 ambulance aur 112 police bhej rahi hoon, kripya phone na kaatein. Ek emergency officer aapko directly connect kar rahi hoon. Surakshit jagah par rahein, line par bane rahiye.",
+        "mic_dump": "[interrupted] (mic activity detected — 500.0ms speech dumped at -20.0 dBFS)",
+        "raw_transcript": "",
+        "audio_stats": {
+          "duration_ms": 500.0,
+          "peak_dbfs": -20.0,
+          "jitter_ms_est": 27.5
+        }
+      },
+      "was_interrupted": false,
+      "policy_number": null,
+      "road_type": null,
+      "road_explicit": false,
+      "parts": [
+        "puncture"
+      ],
+      "is_drivable": true,
+      "drivable_reason": "no visible damage / drivable",
+      "injured": true,
+      "confirm_intent": "confirm",
+      "emergency_calls": [
+        {
+          "line": "112",
+          "label": "🚨 112 AMBULANCE DISPATCHED"
+        },
+        {
+          "line": "112-POLICE",
+          "label": "👮 112 POLICE DISPATCHED"
+        }
+      ]
+    },
+    "ticket_status": "EMERGENCY — 112 AMBULANCE & POLICE DISPATCHED",
+    "reply": "Aapki jaan sabse pehle hai — main turant 112 ambulance aur 112 police bhej rahi hoon, kripya phone na kaatein. Ek emergency officer aapko directly connect kar rahi hoon. Surakshit jagah par rahein, line par bane rahiye."
+  },
+  {
+    "call_id": "call-379ba63d",
+    "at": 1794322473.137422,
+    "stage": "incident",
+    "language": "hi-IN",
+    "transcript": "अरे, सब safe है। कथि tension की बात कोनी?",
+    "entities": {
+      "language": "hi-IN",
+      "call_started": true,
+      "stage": "incident",
+      "policy_number": null,
+      "road_type": null,
+      "road_explicit": false,
+      "parts": [],
+      "is_drivable": true,
+      "drivable_reason": "no visible damage / drivable",
+      "injured": false,
+      "confirm_intent": "none",
+      "was_interrupted": false
+    },
+    "ticket_status": "STAGE 2 — INCIDENT DETAILS IN PROGRESS",
+    "reply": "Bahut shukriya ji — aap sab safe hain, yahi sabse badi baat hai. Ab bataiye, gaadi ko kya hua?"
+  },
+  {
+    "call_id": "call-a7fe8658",
+    "at": 1794323475.097814,
+    "stage": "incident",
+    "language": "hi-IN",
+    "transcript": "भाई, हम सब safe हैं। किसी को चोट नहीं लगी।",
+    "entities": {
+      "language": "hi-IN",
+      "call_started": true,
+      "stage": "incident",
+      "policy_number": null,
+      "road_type": null,
+      "road_explicit": false,
+      "parts": [],
+      "is_drivable": true,
+      "drivable_reason": "no visible damage / drivable",
+      "injured": false,
+      "confirm_intent": "none",
+      "was_interrupted": false
+    },
+    "ticket_status": "STAGE 2 — INCIDENT DETAILS IN PROGRESS",
+    "reply": "Bahut shukriya ji — aap sab safe hain, yahi sabse badi baat hai. Ab bataiye, gaadi ko kya hua?"
+  },
+  {
+    "call_id": "call-dee68d43",
+    "at": 1794323962.2367182,
+    "stage": "incident",
+    "language": "hi-IN",
+    "transcript": "भाई, हम सब कति safe हाँ?",
+    "entities": {
+      "language": "hi-IN",
+      "call_started": true,
+      "stage": "incident",
+      "interrupted_agent_text": "Namaste! Main BimaVani Roadside Helpline se bol rahi hoon. Sabse pehle batayein—kya aap aur gaadi mein baithe sabhi log safe hain, ya kisi ko chot lagi hai?",
+      "interruption_log": [
+        {
+          "tag": "[interrupted]",
+          "at": 1794323960.1491551,
+          "source": "server_vad_mic",
+          "agent_cut": "Namaste! Main BimaVani Roadside Helpline se bol rahi hoon. Sabse pehle batayein—kya aap aur gaadi mein baithe sabhi log safe hain, ya kisi ko chot lagi hai?",
+          "mic_dump": "[interrupted] (mic activity detected — 320.0ms speech dumped at -24.5 dBFS)",
+          "raw_transcript": "",
+          "audio_stats": {
+            "duration_ms": 320.0,
+            "peak_dbfs": -24.5,
+            "jitter_ms_est": 28.0
+          }
+        }
+      ],
+      "last_interruption": {
+        "tag": "[interrupted]",
+        "at": 1794323960.1491551,
+        "source": "server_vad_mic",
+        "agent_cut": "Namaste! Main BimaVani Roadside Helpline se bol rahi hoon. Sabse pehle batayein—kya aap aur gaadi mein baithe sabhi log safe hain, ya kisi ko chot lagi hai?",
+        "mic_dump": "[interrupted] (mic activity detected — 320.0ms speech dumped at -24.5 dBFS)",
+        "raw_transcript": "",
+        "audio_stats": {
+          "duration_ms": 320.0,
+          "peak_dbfs": -24.5,
+          "jitter_ms_est": 28.0
+        }
+      },
+      "was_interrupted": false,
+      "policy_number": null,
+      "road_type": null,
+      "road_explicit": false,
+      "parts": [],
+      "is_drivable": true,
+      "drivable_reason": "no visible damage / drivable",
+      "injured": false,
+      "confirm_intent": "confirm"
+    },
+    "ticket_status": "STAGE 2 — INCIDENT DETAILS IN PROGRESS",
+    "reply": "Bahut shukriya ji — aap sab safe hain, yahi sabse badi baat hai. Ab bataiye, gaadi ko kya hua?"
+  },
+  {
+    "call_id": "call_alpha",
+    "at": 1794325255.567143,
+    "stage": "confirm",
+    "language": "hi-IN",
+    "transcript": "Crash on NH-44 highway, radiator damaged, policy 7820",
+    "entities": {
+      "language": "hi-IN",
+      "call_started": true,
+      "stage": "confirm",
+      "policy_number": "7820",
+      "road_type": "NH",
+      "road_explicit": true,
+      "parts": [
+        "radiator"
+      ],
+      "is_drivable": false,
+      "drivable_reason": "Radiator burst / coolant leak",
+      "injured": false,
+      "confirm_intent": "none",
+      "last_dispatch": {
+        "tool": "dispatch_smart_rsa",
+        "road_type": "NH",
+        "vehicle_class": "four_wheeler",
+        "policy_number": "7820",
+        "parts": [
+          "radiator"
+        ],
+        "timestamp_utc": "2026-11-10T15:40:55.140738+00:00",
+        "workflow": "B",
+        "workflow_label": "Workflow B — Non-Drivable Crash",
+        "do_not_start_engine": true,
+        "engine_warning": "🔴 Do NOT Start Engine! (radiator/axle/coolant/tyre damage risk)",
+        "engine_warning_spoken_hi": "Kripya gaadi start bilkul MAT kijiye — engine seize ho sakta hai.",
+        "engine_warning_spoken_ta": "தயவுசெய்து வண்டியை ஸ்டார்ட் செய்யாதீர்கள் — என்ஜின் பழுதடைய வாய்ப்புள்ளது.",
+        "dispatch_vendor": "Free RSA Flatbed Tow Truck (up to 50 km)",
+        "dispatch_vendor_type": "flatbed_tow_truck",
+        "eta_mins": 38,
+        "free_tow_km_limit": 50,
+        "destination_garage": {
+          "id": "g_karnal_motors",
+          "name": "Karnal Motors Pvt Ltd",
+          "city": "Karnal",
+          "road_type": "NH",
+          "highway": "NH-44",
+          "km_marker": "126",
+          "cashless": true,
+          "network": "MDRT-CASHLESS-NET",
+          "services_2w": false,
+          "services_ev": false,
+          "phone": "090-SYN-001"
+        },
+        "nhai_patrol_alerted": true,
+        "nhai_patrol_detail": "1033 NHAI Highway Patrol — fast-lane safety cones requested",
+        "rural_reimbursement": null,
+        "ncb_protected": false,
+        "photos_note": "For surveyor record: 4 photos with number plate visible."
+      },
+      "last_road_type": "NH",
+      "last_parts": [
+        "radiator"
+      ],
+      "last_drivable": false,
+      "last_draft": {
+        "tool": "calculate_irdai_claim_draft",
+        "claim_id": "FNOL-2EE19526",
+        "policy_number": "7820",
+        "owner": "Rohit Mehra",
+        "vehicle": "Maruti Suzuki Swift VXi",
+        "vehicle_class": "four_wheeler",
+        "plan": "Zero-Dep Bumper-to-Bumper",
+        "zero_depreciation": true,
+        "idv_inr": 520000,
+        "compulsory_deductible_inr": 1000,
+        "line_items": [
+          {
+            "part": "radiator",
+            "display_en": "Radiator burst / coolant leak",
+            "genuine_cost_low": 10500,
+            "genuine_cost_high": 12800,
+            "depreciation_pct_applied": 0.0,
+            "allowable_low": 10500,
+            "allowable_high": 12800
+          }
+        ],
+        "estimated_repair_low_inr": 9500,
+        "estimated_repair_high_inr": 11800,
+        "estimated_range_display": "₹9,500 se ₹11,800",
+        "estimated_range_display_ta": "₹9,500 முதல் ₹11,800 வரை",
+        "status_label": "Estimated Range Subject to Surveyor Inspection — Not Final Approval",
+        "status_label_spoken_hi": "Yeh anumaanit range hai — antim rashi surveyor nireekshan ke baad tay hogi.",
+        "status_label_spoken_ta": "இது மதிப்பீட்டுத் தொகை மட்டுமே — ஆய்வாளர் பரிசோதனைக்குப் பிறகு இறுதித் தொகை உறுதி செய்யப்படும்.",
+        "photos_required": 4,
+        "age_of_vehicle_years": 2.0
+      },
+      "was_interrupted": false
+    },
+    "ticket_status": "CONFIRM_PENDING",
+    "reply": "Radiator damage hai, isliye gaadi start na karein. Kya main free flatbed tow aur claim confirm kar doon?"
+  },
+  {
+    "call_id": "test_fixed_1",
+    "at": 1794325555.373756,
+    "stage": "incident",
+    "language": "hi-IN",
+    "transcript": "hum sab theek hain, radiator leak ho gaya hai.",
+    "entities": {
+      "language": "hi-IN",
+      "call_started": true,
+      "stage": "incident",
+      "policy_number": null,
+      "road_type": null,
+      "road_explicit": false,
+      "parts": [
+        "radiator"
+      ],
+      "is_drivable": false,
+      "drivable_reason": "Radiator burst / coolant leak",
+      "injured": false,
+      "confirm_intent": "none",
+      "was_interrupted": false
+    },
+    "ticket_status": "STAGE 2 — ROAD TYPE NEEDED",
+    "reply": "Radiator leak samajh gayi. Aap abhi kahan hain — highway par, sheher mein, ya kisi chhote raaste par?"
+  },
+  {
+    "call_id": "test_fixed_2",
+    "at": 1794325557.750908,
+    "stage": "incident",
+    "language": "hi-IN",
+    "transcript": "koi chot nahi hai, tyre puncture ho gaya hai.",
+    "entities": {
+      "language": "hi-IN",
+      "call_started": true,
+      "stage": "incident",
+      "policy_number": null,
+      "road_type": null,
+      "road_explicit": false,
+      "parts": [
+        "puncture"
+      ],
+      "is_drivable": true,
+      "drivable_reason": "no visible damage / drivable",
+      "injured": false,
+      "confirm_intent": "none",
+      "was_interrupted": false
+    },
+    "ticket_status": "STAGE 2 — LOCATION NEEDED (minor repair)",
+    "reply": "Puncture? Koi baat nahi ji. Aap abhi city ke andar hain, ya highway par?"
+  },
+  {
+    "call_id": "call-dd2665d0",
+    "at": 1794325779.005876,
+    "stage": "incident",
+    "language": "hi-IN",
+    "transcript": "हम सभी safe हैं भाई, किसी को चोट नहीं लगी।",
+    "entities": {
+      "language": "hi-IN",
+      "call_started": true,
+      "stage": "incident",
+      "interrupted_agent_text": "Namaste! Main BimaVani Roadside Helpline se bol rahi hoon. Sabse pehle batayein—kya aap aur gaadi mein baithe sabhi log safe hain, ya kisi ko chot lagi hai?",
+      "interruption_log": [
+        {
+          "tag": "[interrupted]",
+          "at": 1794325776.673549,
+          "source": "server_vad_mic",
+          "agent_cut": "Namaste! Main BimaVani Roadside Helpline se bol rahi hoon. Sabse pehle batayein—kya aap aur gaadi mein baithe sabhi log safe hain, ya kisi ko chot lagi hai?",
+          "mic_dump": "[interrupted] ਸੇਵਾ",
+          "raw_transcript": "ਸੇਵਾ",
+          "audio_stats": {
+            "duration_ms": 320.0,
+            "peak_dbfs": -26.5,
+            "jitter_ms_est": 30.0
+          }
+        }
+      ],
+      "last_interruption": {
+        "tag": "[interrupted]",
+        "at": 1794325776.673549,
+        "source": "server_vad_mic",
+        "agent_cut": "Namaste! Main BimaVani Roadside Helpline se bol rahi hoon. Sabse pehle batayein—kya aap aur gaadi mein baithe sabhi log safe hain, ya kisi ko chot lagi hai?",
+        "mic_dump": "[interrupted] ਸੇਵਾ",
+        "raw_transcript": "ਸੇਵਾ",
+        "audio_stats": {
+          "duration_ms": 320.0,
+          "peak_dbfs": -26.5,
+          "jitter_ms_est": 30.0
+        }
+      },
+      "was_interrupted": false,
+      "policy_number": null,
+      "road_type": null,
+      "road_explicit": false,
+      "parts": [],
+      "is_drivable": true,
+      "drivable_reason": "no visible damage / drivable",
+      "injured": false,
+      "confirm_intent": "none"
+    },
+    "ticket_status": "STAGE 2 — INCIDENT DETAILS IN PROGRESS",
+    "reply": "Bahut shukriya ji — aap sab safe hain, yahi sabse badi baat hai. Ab bataiye, gaadi ko kya hua?"
+  },
+  {
+    "call_id": "call-dd2665d0",
+    "at": 1794325793.431266,
+    "stage": "incident",
+    "language": "hi-IN",
+    "transcript": "अरे भाई, कति safe! हम कोई दिक्कत की बात को नहीं।",
+    "entities": {
+      "language": "hi-IN",
+      "call_started": true,
+      "stage": "incident",
+      "interrupted_agent_text": "Bahut shukriya ji — aap sab safe hain, yahi sabse badi baat hai. Ab bataiye, gaadi ko kya hua?",
+      "interruption_log": [
+        {
+          "tag": "[interrupted]",
+          "at": 1794325776.673549,
+          "source": "server_vad_mic",
+          "agent_cut": "Namaste! Main BimaVani Roadside Helpline se bol rahi hoon. Sabse pehle batayein—kya aap aur gaadi mein baithe sabhi log safe hain, ya kisi ko chot lagi hai?",
+          "mic_dump": "[interrupted] ਸੇਵਾ",
+          "raw_transcript": "ਸੇਵਾ",
+          "audio_stats": {
+            "duration_ms": 320.0,
+            "peak_dbfs": -26.5,
+            "jitter_ms_est": 30.0
+          }
+        },
+        {
+          "tag": "[interrupted]",
+          "at": 1794325781.905232,
+          "source": "auto_vad_mic",
+          "agent_cut": "Bahut shukriya ji — aap sab safe hain, yahi sabse badi baat hai. Ab bataiye, gaadi ko kya hua?",
+          "mic_dump": "[interrupted] (mic activity detected — 500.0ms speech dumped at -11.7 dBFS)",
+          "raw_transcript": "",
+          "audio_stats": {
+            "duration_ms": 500.0,
+            "peak_dbfs": -11.7,
+            "jitter_ms_est": 28.6
+          }
+        },
+        {
+          "tag": "[interrupted]",
+          "at": 1794325790.447974,
+          "source": "server_vad_mic",
+          "agent_cut": "[interrupted] Bahut shukriya ji — aap sab safe hain, yahi sabse badi baat hai. Ab bataiye, gaadi ko kya hua?",
+          "mic_dump": "[interrupted] safe है भाई, किसी को चोट नहीं लगी।",
+          "raw_transcript": "safe है भाई, किसी को चोट नहीं लगी।",
+          "audio_stats": {
+            "duration_ms": 3780.0,
+            "peak_dbfs": -11.3,
+            "jitter_ms_est": 28.1
+          }
+        }
+      ],
+      "last_interruption": {
+        "tag": "[interrupted]",
+        "at": 1794325790.447974,
+        "source": "server_vad_mic",
+        "agent_cut": "[interrupted] Bahut shukriya ji — aap sab safe hain, yahi sabse badi baat hai. Ab bataiye, gaadi ko kya hua?",
+        "mic_dump": "[interrupted] safe है भाई, किसी को चोट नहीं लगी।",
+        "raw_transcript": "safe है भाई, किसी को चोट नहीं लगी।",
+        "audio_stats": {
+          "duration_ms": 3780.0,
+          "peak_dbfs": -11.3,
+          "jitter_ms_est": 28.1
+        }
+      },
+      "was_interrupted": false,
+      "policy_number": null,
+      "road_type": null,
+      "road_explicit": false,
+      "parts": [],
+      "is_drivable": true,
+      "drivable_reason": "no visible damage / drivable",
+      "injured": false,
+      "confirm_intent": "none"
+    },
+    "ticket_status": "STAGE 2 — PART / DAMAGE DETAILS NEEDED",
+    "reply": "{pol_note}Samajh gayi ji — gaadi mein exact kya problem aa rahi hai? Kya radiator ya engine ka issue hai, tyre puncture hai, battery dead hai, ya bahar ka dent?"
+  },
+  {
+    "call_id": "latency_bench",
+    "at": 1794325907.012169,
+    "stage": "policy_fnol",
+    "language": "hi-IN",
+    "transcript": "Crash ho gaya hai NH-44 par, radiator damage hai.",
+    "entities": {
+      "language": "hi-IN",
+      "call_started": true,
+      "stage": "policy_fnol",
+      "policy_number": null,
+      "road_type": "NH",
+      "road_explicit": true,
+      "parts": [
+        "radiator"
+      ],
+      "is_drivable": false,
+      "drivable_reason": "Radiator burst / coolant leak",
+      "injured": false,
+      "confirm_intent": "none",
+      "last_dispatch": {
+        "tool": "dispatch_smart_rsa",
+        "road_type": "NH",
+        "vehicle_class": "four_wheeler",
+        "policy_number": null,
+        "parts": [
+          "radiator"
+        ],
+        "timestamp_utc": "2026-11-10T15:51:46.240507+00:00",
+        "workflow": "B",
+        "workflow_label": "Workflow B — Non-Drivable Crash",
+        "do_not_start_engine": true,
+        "engine_warning": "🔴 Do NOT Start Engine! (radiator/axle/coolant/tyre damage risk)",
+        "engine_warning_spoken_hi": "Kripya gaadi start bilkul MAT kijiye — engine seize ho sakta hai.",
+        "engine_warning_spoken_ta": "தயவுசெய்து வண்டியை ஸ்டார்ட் செய்யாதீர்கள் — என்ஜின் பழுதடைய வாய்ப்புள்ளது.",
+        "dispatch_vendor": "Free RSA Flatbed Tow Truck (up to 50 km)",
+        "dispatch_vendor_type": "flatbed_tow_truck",
+        "eta_mins": 38,
+        "free_tow_km_limit": 50,
+        "destination_garage": {
+          "id": "g_karnal_motors",
+          "name": "Karnal Motors Pvt Ltd",
+          "city": "Karnal",
+          "road_type": "NH",
+          "highway": "NH-44",
+          "km_marker": "126",
+          "cashless": true,
+          "network": "MDRT-CASHLESS-NET",
+          "services_2w": false,
+          "services_ev": false,
+          "phone": "090-SYN-001"
+        },
+        "nhai_patrol_alerted": true,
+        "nhai_patrol_detail": "1033 NHAI Highway Patrol — fast-lane safety cones requested",
+        "rural_reimbursement": null,
+        "ncb_protected": false,
+        "photos_note": "For surveyor record: 4 photos with number plate visible."
+      },
+      "last_road_type": "NH",
+      "last_parts": [
+        "radiator"
+      ],
+      "last_drivable": false,
+      "was_interrupted": false
+    },
+    "ticket_status": "RSA DISPATCH-PENDING — FNOL AWAITING POLICY NUMBER",
+    "reply": "Shukar hai aap safe hain! Gaadi start mat kijiye, aur apna policy number de dijiye."
   }
 ]

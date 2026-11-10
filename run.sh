@@ -41,6 +41,6 @@ case "$MODE" in
     fi
     echo "[run.sh] Starting BimaVani on http://127.0.0.1:8000  (Ctrl+C to stop)"
     exec "$VENV_DIR/bin/python" -m uvicorn backend.main:app \
-      --host "${UVICORN_HOST:-127.0.0.1}" --port "${UVICORN_PORT:-8000}"
+      --host "${UVICORN_HOST:-127.0.0.1}" --port "${UVICORN_PORT:-8000}" --reload
     ;;
 esac

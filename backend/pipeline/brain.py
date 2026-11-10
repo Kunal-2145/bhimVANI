@@ -1060,7 +1060,7 @@ class Brain:
                 if not entities.get("road_explicit"):
                     mem.set_stage(ST_INCIDENT)
                     mem.ticket_status = "STAGE 2 — LOCATION NEEDED (minor repair)"
-                    pp = b["minor_part_prefix"].format(part=part_word) if part_word else b["minor_part_empty"]
+                    pp = f"{part_word.capitalize()}? " if part_word else ""
                     reply = b["ask_loc_minor"].format(part_prefix=pp)
                     return reply, None, None, mem
                 dispatch, _draft, reply = self._dispatch_and_readback(
@@ -1074,9 +1074,11 @@ class Brain:
                 mem.set_stage(ST_INCIDENT)
                 mem.ticket_status = "STAGE 2 — ROAD TYPE NEEDED"
                 dt = sum(1 for u in mem.utterances if u.get("role") == "driver")
-                roads = b["ask_roads"]
+                roads = b.get("road_qs") or b.get("ask_roads") or [
+                    "Aap abhi National Highway par hain, ya city road par?"
+                ]
                 road_q = roads[dt % len(roads)]
-                pp = b["major_part_prefix"].format(part=part_word) if part_word else ""
+                pp = f"{part_word.capitalize()}? " if part_word else ""
                 reply = b["ask_loc_lead"].format(part_prefix=pp) + road_q
                 return reply, None, None, mem
 

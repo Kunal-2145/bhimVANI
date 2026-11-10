@@ -17,10 +17,15 @@ import json
 import math
 import random
 import struct
+import os
+import sys
 import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List
+
+# Ensure project root is on sys.path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from backend.gnani_client import wrap_pcm_as_wav
 from backend.pipeline.brain import Brain

@@ -47,4 +47,4 @@ if "%UVICORN_HOST%"=="" set "UVICORN_HOST=127.0.0.1"
 if "%UVICORN_PORT%"=="" set "UVICORN_PORT=8000"
 
 echo [run.bat] Starting BimaVani on http://%UVICORN_HOST%:%UVICORN_PORT%  (Ctrl+C to stop)
-.venv\Scripts\python.exe -m uvicorn backend.main:app --host %UVICORN_HOST% --port %UVICORN_PORT%
+.venv\Scripts\python.exe -m uvicorn backend.main:app --host %UVICORN_HOST% --port %UVICORN_PORT% --reload
