@@ -37,6 +37,7 @@ from backend.rsa_and_claim_rules import (
     IRDAI,
     PARTS,
     POLICIES,
+    _keyword_negated_in_text,
     calculate_irdai_claim_draft,
     compose_agent_reply,
     confirm_detection,
@@ -108,13 +109,22 @@ _INTERRUPT_CORRECTION_RE = re.compile(r"\b(?:galat|wrong|incorrect|mistake|nahi|
 _DEVANAGARI_RE = re.compile(r"[\u0901-\u0963\u0966-\u097F]")
 _OTHER_INDIC_EXCEPT_DEV_RE = re.compile(r"[\u0980-\u0D7F]")
 _ANY_INDIC_RE = re.compile(r"[\u0901-\u0963\u0966-\u0D7F]")
+_STRONG_HI_DEV_RE = re.compile(r"(?:है|हूँ|हैं|मेरा|मेरी|मेरे|गाड़ी|क्या|क्योंकि|नहीं)")
+_DRIVABLE_RETRACT_RE = re.compile(
+    r"\b(?:ab\s+chal\s+(?:sakti|raha|rahi)|now\s+drivable|can\s+drive\s+now|gaadi\s+theek\s+chal\s+rahi)\b",
+    re.I,
+)
 
 
 def _looks_like_vehicle_problem(low: str, parts: List[str],
                                 triage: Dict[str, Any]) -> bool:
     if parts or triage.get("injured"):
         return True
-    return any(re.search(r"(?<![a-z])" + re.escape(k), low) for k in _PROBLEM_SIGNALS)
+    for k in _PROBLEM_SIGNALS:
+        for m in re.finditer(r"(?<![a-z])" + re.escape(k) + r"(?![a-z])", low):
+            if not _keyword_negated_in_text(low, m.start(), m.end()):
+                return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -671,6 +681,13 @@ class Brain:
             # Keep locked regional session unless caller explicitly switched UI to en-IN
             if detected_lang == "en-IN" and prev_lang and prev_lang not in ("hi-IN", "en-IN") and explicit_lang != "en-IN":
                 lang = prev_lang
+            elif (
+                detected_lang == "hi-IN"
+                and prev_lang == "mr-IN"
+                and explicit_lang != "hi-IN"
+                and not _STRONG_HI_DEV_RE.search(transcript or "")
+            ):
+                lang = "mr-IN"
             else:
                 lang = detected_lang
         elif explicit_lang:
@@ -724,7 +741,24 @@ class Brain:
             (set(parts) != set(prior_parts)) and mem.entities.get("last_parts") is not None
         )
 
+        _, transcript_non_drivable_reason = (
+            detect_drivability([], transcript) if transcript else (True, "")
+        )
+        explicit_now_non_drivable = not detect_drivability([], transcript)[0] if transcript else False
+        if _DRIVABLE_RETRACT_RE.search(low):
+            mem.entities.pop("explicit_non_drivable", None)
+            mem.entities.pop("explicit_non_drivable_reason", None)
+        elif explicit_now_non_drivable:
+            mem.entities["explicit_non_drivable"] = True
+            mem.entities["explicit_non_drivable_reason"] = transcript_non_drivable_reason
+
         is_drivable, drivable_reason = detect_drivability(parts, transcript)
+        if is_drivable and mem.entities.get("explicit_non_drivable") and not _DRIVABLE_RETRACT_RE.search(low):
+            is_drivable = False
+            drivable_reason = str(
+                mem.entities.get("explicit_non_drivable_reason")
+                or "Caller stated vehicle cannot be driven"
+            )
         triage = triage_injury_and_safety(transcript, language=lang)
         confirm = confirm_detection(transcript, prior_policy=prior_policy)
         was_interrupted = bool(mem.entities.get("was_interrupted"))
@@ -1051,7 +1085,7 @@ class Brain:
                 mem.set_stage(ST_INCIDENT)
                 mem.ticket_status = "STAGE 2 — PART / DAMAGE DETAILS NEEDED"
                 pol_note = b["pol_note"].format(pol=entities["policy_number"]) if entities.get("policy_number") else ""
-                reply = pol_note + b["ask_part"]
+                reply = b["ask_part"].format(pol_note=pol_note)
                 return reply, None, None, mem
 
             if minor_only:
@@ -1060,7 +1094,7 @@ class Brain:
                 if not entities.get("road_explicit"):
                     mem.set_stage(ST_INCIDENT)
                     mem.ticket_status = "STAGE 2 — LOCATION NEEDED (minor repair)"
-                    pp = f"{part_word.capitalize()}? " if part_word else ""
+                    pp = f"{part_word[0].upper()}{part_word[1:]}? " if part_word else ""
                     reply = b["ask_loc_minor"].format(part_prefix=pp)
                     return reply, None, None, mem
                 dispatch, _draft, reply = self._dispatch_and_readback(
@@ -1078,7 +1112,7 @@ class Brain:
                     "Aap abhi National Highway par hain, ya city road par?"
                 ]
                 road_q = roads[dt % len(roads)]
-                pp = f"{part_word.capitalize()}? " if part_word else ""
+                pp = f"{part_word[0].upper()}{part_word[1:]}? " if part_word else ""
                 reply = b["ask_loc_lead"].format(part_prefix=pp) + road_q
                 return reply, None, None, mem
 

@@ -7,9 +7,9 @@ A production-grade hackathon project proving **one thesis end-to-end**:
 > limits**, and **mid-sentence barge-in corrections** — while safely dispatching
 > real-world RSA workflows and auto-drafting IRDAI-compliant claim numbers.
 
-Built on the **Gnani.ai Vachana/Artha ecosystem**: **Prisma v2.5/v3.0** STT +
-**Timbre v2.5/v3.0** TTS (voice *Nalini*), with a **100% deterministic Hinglish
-tool-brain that needs ZERO LLM and ZERO hallucinations** — it works with *only*
+Built on the **Gnani.ai Vachana/Artha ecosystem**: **Prisma v3.0/v2.5** STT +
+**Timbre v3.0/v2.5** TTS (per-language voices such as *Nalini*, *Asha*, *Kavya*, *Maya*, *Rani*, *Rekha*), with a **deterministic Hinglish & 10-language
+tool-brain + optional OpenAI-compatible LLM adapter** — it works with *only*
 `GNANI_API_KEY`.
 
 ---
@@ -69,8 +69,8 @@ tool-brain that needs ZERO LLM and ZERO hallucinations** — it works with *only
 | Cache | `hashlib.md5(text|voice|model|lang).wav` under `backend/cache/tts/` → demo re-runs cost **0 credits** |
 | No key? | **Credit-Shield Fallback Mode** — deterministic transcript path + locally-synthesized spoken-tone WAV. The demo never crashes. |
 
-**Models:** STT `prisma-v2.5` (default) / `prisma-v3.0` · TTS `timbre-v2.5` (default) / `timbre-v3.0`.
-**Never** `timbre-v2.0` (retired). Languages: `hi-IN` (default) `indic-auto en-IN mr-IN ta-IN te-IN`.
+**Models:** STT `prisma-v3.0` (default) / `prisma-v2.5` · TTS `timbre-v3.0` (default) / `timbre-v2.5`.
+**Never** `timbre-v2.0` (retired). Languages: `indic-auto` (default auto-detect) + all 10 Gnani languages (`hi-IN`, `en-IN`, `mr-IN`, `ta-IN`, `te-IN`, `kn-IN`, `ml-IN`, `bn-IN`, `gu-IN`, `pa-IN`).
 
 ---
 
@@ -101,7 +101,7 @@ run.bat
 python verify_gnani_api.py
 ```
 
-Open http://127.0.0.1:8000 — or set the key live from the UI (**🔑 Set Gnani API Key**, hot-reloads without restart) and press **🧪 Test Live Gnani API**.
+Open http://127.0.0.1:8000 — or set the key live from the UI (**🔑 Gnani API**, hot-reloads without restart) and press **🧪 Test Live Timbre ⇄ Prisma Round-Trip**.
 
 ## Layout
 ```

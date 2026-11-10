@@ -287,18 +287,23 @@ def extract_policy_number(
 
 def _keyword_negated_in_text(t: str, start: int, end: int) -> bool:
     """True if a road/part span is directly negated before a clause break or breakdown verb."""
-    after = t[end: min(len(t), end + 34)]
-    before = t[max(0, start - 24): start]
+    after = t[end: min(len(t), end + 44)]
+    before = t[max(0, start - 28): start]
     # Stop at punctuation or active breakdown verbs so "radiator phat gaya start nahi ho rahi"
     # never treats "start nahi" as negating "radiator".
     clause_after = re.split(r"[,.;!?।—]", after, maxsplit=1)[0]
     if re.search(
-        r"^\s*(?:(?:(?!(?:phat|toot|tut|band|start|chal|gay[ai]|hua|hui|lag|aa|raha|rahi)\b)[a-z]+)\s+){0,3}"
-        r"(?:nahi|nahin|na|naa|koni|mat|not)\b",
+        r"^\s*(?:(?:(?!(?:phat|toot|tut|band|start|chal|gay[ai]|hua|hui|lag|aa|raha|rahi|"
+        r"फट|टूट|टूटा|टूटी|टूटे|बंद|स्टार्ट|चल|गया|गयी|गई|गए|हुआ|हुई|लग|लगी|आ|रहा|रही)\b)"
+        r"[a-z\u0900-\u097f]+)\s+){0,4}"
+        r"(?:nahi|nahin|na|naa|koni|mat|not|नहीं|नही|नहि|ना|नाही|कोनी|मत)(?![a-z\u0900-\u097f])",
         clause_after,
     ):
         return True
-    if re.search(r"\b(?:no|not|without|bina|binaa|nahi|nahin)\s+(?:any\s+)?$", before):
+    if re.search(
+        r"(?:(?<![a-z\u0900-\u097f])(?:no|not|without|bina|binaa|nahi|nahin|नहीं|बिना)\s+(?:any\s+)?)$",
+        before,
+    ):
         return True
     return False
 

@@ -498,10 +498,7 @@ async def call_turn(payload: TurnIn) -> Dict[str, Any]:
     call_id = payload.call_id or "live"
     sess = REGISTRY.get_or_create(call_id)
     sm = get_state_machine(call_id)
-    if sm.state == "IDLE":
-        sm.transition("LISTENING")
-    elif sm.state == "SPEAKING":
-        sm.transition("LISTENING")
+    _sm_ensure_listening(sm)
 
     cur_task = asyncio.current_task()
     if cur_task is not None:
@@ -586,6 +583,18 @@ async def _empty_turn(
 # Barge-in — Stop & Flush ALL (<50ms contract) + [interrupted] context dump
 # ---------------------------------------------------------------------------
 
+def _sm_ensure_listening(sm: TurnStateMachine) -> None:
+    """Safely bring TurnStateMachine into LISTENING from any non-LISTENING state."""
+    if sm.state == "LISTENING":
+        return
+    if sm.state in ("IDLE", "SPEAKING", "INTERRUPTED"):
+        sm.transition("LISTENING")
+        return
+    if sm.state == "THINKING":
+        sm.transition("IDLE")
+        sm.transition("LISTENING")
+
+
 async def _handle_barge_in_core(
     call_id: str,
     sess: SessionPipeline,
@@ -643,6 +652,7 @@ async def _handle_barge_in_core(
 
     cards: Dict[str, Any] = {}
     if update_cards and transcript:
+        _sm_ensure_listening(sm)
         sm.transition("THINKING")
         updated = await BRAIN.process_turn(call_id, transcript, {"barge_in": True}, language=language or None)
         reply_lang = updated.get("language") or "hi-IN"
@@ -729,10 +739,7 @@ async def ws_call(websocket: WebSocket, call_id: str) -> None:
         if cur is not None:
             sm.register_task(cur)
         try:
-            if sm.state == "IDLE":
-                sm.transition("LISTENING")
-            elif sm.state == "SPEAKING":
-                sm.transition("LISTENING")
+            _sm_ensure_listening(sm)
 
             # [1] + [3]
             _sync_global_stage("stage_1", (time.perf_counter() - t_start) * 1000.0, sess)
@@ -852,6 +859,27 @@ async def ws_call(websocket: WebSocket, call_id: str) -> None:
             })
         except asyncio.CancelledError:
             pass
+        except Exception as exc:
+            if sm.state != "IDLE":
+                sm.transition("IDLE")
+            sm.transition("LISTENING")
+            await send_evt({
+                "type": "error",
+                "call_id": call_id,
+                "error": f"Turn processing error: {exc}",
+            })
+            await send_evt({
+                "type": "turn_complete",
+                "call_id": call_id,
+                "error": str(exc),
+                "total_turn_ms": round((time.perf_counter() - t_start) * 1000, 1),
+                "pipeline": {
+                    "stages_ms": _stages_snapshot(sess),
+                    "queues": sess.bus.snapshot(),
+                    "input_jitter": sess.input_jitter.snapshot(),
+                    "output_jitter": sess.output_jitter.snapshot(),
+                },
+            })
 
     await send_evt({
         "type": "ready",
@@ -870,157 +898,167 @@ async def ws_call(websocket: WebSocket, call_id: str) -> None:
             sess.touch()
             mtype = str(msg.get("type") or "")
 
-            if mtype == "ping":
-                await send_evt({"type": "pong", "sessions": REGISTRY.snapshot()})
+            try:
+                if mtype == "ping":
+                    await send_evt({"type": "pong", "sessions": REGISTRY.snapshot()})
 
-            elif mtype == "config":
-                sess.endpoint_state.configure(
-                    mode=msg.get("endpoint_mode"),
-                    vad_silence_ms=msg.get("vad_silence_ms"),
-                )
-                if msg.get("vad_silence_ms"):
-                    sess.input_jitter.configure_vad(int(msg["vad_silence_ms"]))
-                if "server_auto_endpoint" in msg:
-                    server_auto_endpoint = bool(msg["server_auto_endpoint"])
-                if msg.get("stt_language") is not None:
-                    sess.stt_language = str(msg["stt_language"] or "").strip()
-                if msg.get("language") is not None:
-                    sess.language = str(msg["language"] or "").strip()
+                elif mtype == "config":
+                    sess.endpoint_state.configure(
+                        mode=msg.get("endpoint_mode"),
+                        vad_silence_ms=msg.get("vad_silence_ms"),
+                    )
+                    if msg.get("vad_silence_ms"):
+                        sess.input_jitter.configure_vad(int(msg["vad_silence_ms"]))
+                    if "server_auto_endpoint" in msg:
+                        server_auto_endpoint = bool(msg["server_auto_endpoint"])
+                    if msg.get("stt_language") is not None:
+                        sess.stt_language = str(msg["stt_language"] or "").strip()
+                    if msg.get("language") is not None:
+                        sess.language = str(msg["language"] or "").strip()
 
-            elif mtype == "start":
-                if active_turn_task and not active_turn_task.done():
-                    active_turn_task.cancel()
-                BRAIN.reset_call(call_id)
-                sess.input_jitter.clear_speech()
-                sess.output_jitter.flush()
-                if msg.get("stt_language") is not None:
-                    sess.stt_language = str(msg["stt_language"] or "").strip()
-                req_lang = str(msg.get("language") or "").strip()
-                if sm.state != "IDLE":
-                    sm.transition("IDLE")
-                sm.transition("LISTENING")
-                sm.transition("THINKING")
-                started = await BRAIN.start_call(call_id, language=req_lang or None)
-                call_lang = started.get("language") or "hi-IN"
-                sess.language = call_lang
-                sess.active_agent_reply = started["reply_text"]
-                await send_evt({
-                    "type": "brain_result",
-                    "call_id": call_id,
-                    "is_greeting": True,
-                    "language": call_lang,
-                    "stage": started["memory"]["stage"],
-                    "reply_text": started["reply_text"],
-                    "ticket_status": started["ticket_status"],
-                    "memory": started["memory"],
-                    "entities": started["memory"]["entities"],
-                })
-                sm.transition("SPEAKING")
-                for c in started["clauses"]:
-                    cp = await _synthesize_one_clause(c, sess=sess, language=call_lang)
-                    await send_evt({"type": "tts_clause", "call_id": call_id, "clause": cp})
-                await send_evt({
-                    "type": "turn_complete",
-                    "call_id": call_id,
-                    "is_greeting": True,
-                    "language": call_lang,
-                    "pipeline": {
-                        "stages_ms": _stages_snapshot(sess),
-                        "queues": sess.bus.snapshot(),
-                        "input_jitter": sess.input_jitter.snapshot(),
-                        "output_jitter": sess.output_jitter.snapshot(),
-                    },
-                })
-
-            elif mtype == "audio_frame":
-                pcm = _decode_b64(msg.get("pcm_b64", ""))
-                seq = msg.get("seq")
-                ts_ms = msg.get("ts_ms")
-                events = sess.input_jitter.push(pcm, seq=seq, ts_ms=ts_ms)
-                frame_counter += 1
-                triggered_vad_barge = False
-                triggered_endpoint = False
-                for ev in events:
-                    if ev["vad"] == "speech" and sm.state in ("SPEAKING", "THINKING") and not triggered_vad_barge:
-                        triggered_vad_barge = True
-                        if active_turn_task and not active_turn_task.done():
-                            active_turn_task.cancel()
-                        ack = await _handle_barge_in_core(
-                            call_id=call_id,
-                            sess=sess,
-                            sm=sm,
-                            source="server_vad_mic",
-                            update_cards=False,
-                        )
-                        await send_evt({"type": "barge_in_ack", **ack})
-                    elif ev["vad"] == "endpoint" and sess.endpoint_state.mode == "auto_vad" and server_auto_endpoint:
-                        triggered_endpoint = True
-                        wav = sess.input_jitter.take_utterance_wav()
-                        if wav:
-                            await send_evt({
-                                "type": "endpoint_detected",
-                                "call_id": call_id,
-                                "input_jitter": sess.input_jitter.snapshot(),
-                            })
-                            if active_turn_task and not active_turn_task.done():
-                                active_turn_task.cancel()
-                            active_turn_task = asyncio.create_task(
-                                _stream_turn(
-                                    wav_bytes=wav,
-                                    mode=sess.endpoint_state.mode,
-                                    vad_ms=sess.endpoint_state.vad_silence_ms,
-                                )
-                            )
-                if frame_counter % 5 == 0 or triggered_vad_barge or triggered_endpoint:
+                elif mtype == "start":
+                    if active_turn_task and not active_turn_task.done():
+                        active_turn_task.cancel()
+                    BRAIN.reset_call(call_id)
+                    sess.input_jitter.clear_speech()
+                    sess.output_jitter.flush()
+                    if msg.get("stt_language") is not None:
+                        sess.stt_language = str(msg["stt_language"] or "").strip()
+                    req_lang = str(msg.get("language") or "").strip()
+                    if sm.state != "IDLE":
+                        sm.transition("IDLE")
+                    sm.transition("LISTENING")
+                    sm.transition("THINKING")
+                    started = await BRAIN.start_call(call_id, language=req_lang or None)
+                    call_lang = started.get("language") or "hi-IN"
+                    sess.language = call_lang
+                    sess.active_agent_reply = started["reply_text"]
                     await send_evt({
-                        "type": "vad_state",
-                        "in_speech": sess.input_jitter._in_speech,
-                        "dbfs": sess.input_jitter.last_dbfs,
-                        "input_jitter": sess.input_jitter.snapshot(),
+                        "type": "brain_result",
+                        "call_id": call_id,
+                        "is_greeting": True,
+                        "language": call_lang,
+                        "stage": started["memory"]["stage"],
+                        "reply_text": started["reply_text"],
+                        "ticket_status": started["ticket_status"],
+                        "memory": started["memory"],
+                        "entities": started["memory"]["entities"],
+                    })
+                    sm.transition("SPEAKING")
+                    for c in started["clauses"]:
+                        cp = await _synthesize_one_clause(c, sess=sess, language=call_lang)
+                        await send_evt({"type": "tts_clause", "call_id": call_id, "clause": cp})
+                    await send_evt({
+                        "type": "turn_complete",
+                        "call_id": call_id,
+                        "is_greeting": True,
+                        "language": call_lang,
+                        "pipeline": {
+                            "stages_ms": _stages_snapshot(sess),
+                            "queues": sess.bus.snapshot(),
+                            "input_jitter": sess.input_jitter.snapshot(),
+                            "output_jitter": sess.output_jitter.snapshot(),
+                        },
                     })
 
-            elif mtype == "barge_in":
-                if active_turn_task and not active_turn_task.done():
-                    active_turn_task.cancel()
-                ack = await _handle_barge_in_core(
-                    call_id=call_id,
-                    sess=sess,
-                    sm=sm,
-                    transcript=str(msg.get("transcript") or ""),
-                    spoken_text=str(msg.get("spoken_text") or ""),
-                    wav_bytes=_decode_b64(msg.get("wav_b64", "")),
-                    pcm_bytes=_decode_b64(msg.get("pcm_b64", "")),
-                    source=str(msg.get("source") or "client_barge_in"),
-                    update_cards=bool(msg.get("update_cards", True)),
-                    language=str(msg.get("language") or ""),
-                )
-                await send_evt({"type": "barge_in_ack", **ack})
+                elif mtype == "audio_frame":
+                    pcm = _decode_b64(msg.get("pcm_b64", ""))
+                    seq = msg.get("seq")
+                    ts_ms = msg.get("ts_ms")
+                    events = sess.input_jitter.push(pcm, seq=seq, ts_ms=ts_ms)
+                    frame_counter += 1
+                    triggered_vad_barge = False
+                    triggered_endpoint = False
+                    for ev in events:
+                        if ev["vad"] == "speech" and sm.state in ("SPEAKING", "THINKING") and not triggered_vad_barge:
+                            triggered_vad_barge = True
+                            if active_turn_task and not active_turn_task.done():
+                                active_turn_task.cancel()
+                            ack = await _handle_barge_in_core(
+                                call_id=call_id,
+                                sess=sess,
+                                sm=sm,
+                                source="server_vad_mic",
+                                update_cards=False,
+                            )
+                            await send_evt({"type": "barge_in_ack", **ack})
+                        elif ev["vad"] == "endpoint" and sess.endpoint_state.mode == "auto_vad" and server_auto_endpoint:
+                            triggered_endpoint = True
+                            wav = sess.input_jitter.take_utterance_wav()
+                            if wav:
+                                await send_evt({
+                                    "type": "endpoint_detected",
+                                    "call_id": call_id,
+                                    "input_jitter": sess.input_jitter.snapshot(),
+                                })
+                                if active_turn_task and not active_turn_task.done():
+                                    active_turn_task.cancel()
+                                active_turn_task = asyncio.create_task(
+                                    _stream_turn(
+                                        wav_bytes=wav,
+                                        mode=sess.endpoint_state.mode,
+                                        vad_ms=sess.endpoint_state.vad_silence_ms,
+                                    )
+                                )
+                    if frame_counter % 5 == 0 or triggered_vad_barge or triggered_endpoint:
+                        await send_evt({
+                            "type": "vad_state",
+                            "in_speech": sess.input_jitter._in_speech,
+                            "dbfs": sess.input_jitter.last_dbfs,
+                            "input_jitter": sess.input_jitter.snapshot(),
+                        })
 
-            elif mtype == "end_turn":
-                if active_turn_task and not active_turn_task.done():
-                    active_turn_task.cancel()
-                wav_bytes = _decode_b64(msg.get("wav_b64", ""))
-                if not wav_bytes and not msg.get("transcript_override"):
-                    wav_bytes = sess.input_jitter.take_utterance_wav(include_preroll_if_empty=True)
-                active_turn_task = asyncio.create_task(
-                    _stream_turn(
-                        wav_bytes=wav_bytes,
-                        transcript_override=str(msg.get("transcript_override") or ""),
-                        mode=str(msg.get("endpoint_mode") or sess.endpoint_state.mode),
-                        vad_ms=int(msg.get("vad_silence_ms") or sess.endpoint_state.vad_silence_ms),
+                elif mtype == "barge_in":
+                    if active_turn_task and not active_turn_task.done():
+                        active_turn_task.cancel()
+                    ack = await _handle_barge_in_core(
+                        call_id=call_id,
+                        sess=sess,
+                        sm=sm,
+                        transcript=str(msg.get("transcript") or ""),
+                        spoken_text=str(msg.get("spoken_text") or ""),
+                        wav_bytes=_decode_b64(msg.get("wav_b64", "")),
+                        pcm_bytes=_decode_b64(msg.get("pcm_b64", "")),
+                        source=str(msg.get("source") or "client_barge_in"),
+                        update_cards=bool(msg.get("update_cards", True)),
                         language=str(msg.get("language") or ""),
-                        stt_language=str(msg.get("stt_language") or ""),
                     )
-                )
+                    await send_evt({"type": "barge_in_ack", **ack})
 
-            elif mtype == "end_call":
-                if active_turn_task and not active_turn_task.done():
-                    active_turn_task.cancel()
-                BRAIN.reset_call(call_id)
-                reset_state_machine(call_id)
-                REGISTRY.remove(call_id)
-                await send_evt({"type": "call_ended", "call_id": call_id})
-                break
+                elif mtype == "end_turn":
+                    if active_turn_task and not active_turn_task.done():
+                        active_turn_task.cancel()
+                    wav_bytes = _decode_b64(msg.get("wav_b64", ""))
+                    if not wav_bytes and not msg.get("transcript_override"):
+                        wav_bytes = sess.input_jitter.take_utterance_wav(include_preroll_if_empty=True)
+                    active_turn_task = asyncio.create_task(
+                        _stream_turn(
+                            wav_bytes=wav_bytes,
+                            transcript_override=str(msg.get("transcript_override") or ""),
+                            mode=str(msg.get("endpoint_mode") or sess.endpoint_state.mode),
+                            vad_ms=int(msg.get("vad_silence_ms") or sess.endpoint_state.vad_silence_ms),
+                            language=str(msg.get("language") or ""),
+                            stt_language=str(msg.get("stt_language") or ""),
+                        )
+                    )
+
+                elif mtype == "end_call":
+                    if active_turn_task and not active_turn_task.done():
+                        active_turn_task.cancel()
+                    BRAIN.reset_call(call_id)
+                    reset_state_machine(call_id)
+                    REGISTRY.remove(call_id)
+                    await send_evt({"type": "call_ended", "call_id": call_id})
+                    break
+            except WebSocketDisconnect:
+                raise
+            except Exception as exc:
+                await send_evt({
+                    "type": "error",
+                    "call_id": call_id,
+                    "message_type": mtype,
+                    "error": str(exc),
+                })
 
     except WebSocketDisconnect:
         if active_turn_task and not active_turn_task.done():

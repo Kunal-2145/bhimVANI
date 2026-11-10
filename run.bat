@@ -45,6 +45,8 @@ if exist ".env" (
 
 if "%UVICORN_HOST%"=="" set "UVICORN_HOST=127.0.0.1"
 if "%UVICORN_PORT%"=="" set "UVICORN_PORT=8000"
+set "RELOAD_ARGS="
+if "%UVICORN_RELOAD%"=="1" set "RELOAD_ARGS=--reload --reload-dir backend --reload-exclude data/* --reload-exclude cache/* --reload-exclude *.json --reload-exclude *.wav"
 
 echo [run.bat] Starting BimaVani on http://%UVICORN_HOST%:%UVICORN_PORT%  (Ctrl+C to stop)
-.venv\Scripts\python.exe -m uvicorn backend.main:app --host %UVICORN_HOST% --port %UVICORN_PORT% --reload
+.venv\Scripts\python.exe -m uvicorn backend.main:app --host %UVICORN_HOST% --port %UVICORN_PORT% %RELOAD_ARGS%

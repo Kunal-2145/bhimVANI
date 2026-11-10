@@ -39,8 +39,16 @@ case "$MODE" in
       echo "[run.sh] NOTE: no .env found -> Credit-Shield Fallback Mode (demo-safe)."
       echo "         Copy .env.example -> .env and add GNANI_API_KEY for live Gnani."
     fi
-    echo "[run.sh] Starting BimaVani on http://127.0.0.1:8000  (Ctrl+C to stop)"
+    echo "[run.sh] Starting BimaVani on http://${UVICORN_HOST:-127.0.0.1}:${UVICORN_PORT:-8000}  (Ctrl+C to stop)"
+    RELOAD_ARGS=()
+    if [[ "${UVICORN_RELOAD:-0}" == "1" ]]; then
+      RELOAD_ARGS=(
+        --reload --reload-dir backend
+        --reload-exclude "data/*" --reload-exclude "cache/*"
+        --reload-exclude "*.json" --reload-exclude "*.wav"
+      )
+    fi
     exec "$VENV_DIR/bin/python" -m uvicorn backend.main:app \
-      --host "${UVICORN_HOST:-127.0.0.1}" --port "${UVICORN_PORT:-8000}" --reload
+      --host "${UVICORN_HOST:-127.0.0.1}" --port "${UVICORN_PORT:-8000}" "${RELOAD_ARGS[@]}"
     ;;
 esac
