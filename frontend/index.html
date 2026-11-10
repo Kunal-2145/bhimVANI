@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BimaVani — Voice Roadside Assistance</title>
+<link rel="stylesheet" href="/style.css?v=20261110m">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛣️</text></svg>">
+</head>
+<body>
+
+<!-- ============================== HEADER ============================== -->
+<header class="topbar">
+  <a class="brand" href="/">
+    <span class="brand-mark">🛣️</span>
+    <span class="brand-name">BimaVani</span>
+  </a>
+  <div class="topbar-right">
+    <span class="kicker">01 / LIVE VOICE HELPLINE</span>
+    <span id="mode-pill" class="chip-status">…</span>
+    <span id="call-timer" class="timer">00:00</span>
+  </div>
+</header>
+
+<!-- =============================== STAGE ============================== -->
+<main class="stage">
+
+  <!-- ---------------------- LEFT: the conversation --------------------- -->
+  <section class="hero">
+    <p class="eyebrow">1-800-BIMA-VANI · ROADSIDE ASSISTANCE · 24×7</p>
+
+    <!-- Big state line: what the agent is doing right now -->
+    <h1 id="hero-line">Tap call.<br>Then just talk.</h1>
+    <p class="hero-sub" id="hero-sub">
+      BimaVani answers in Hinglish, listens while you speak, and answers the moment you pause.
+    </p>
+
+    <!-- Voice agent setup: everything that tunes the ears, not the brain -->
+    <details class="setup">
+      <summary>Voice agent setup</summary>
+      <div class="setup-body">
+        <label class="slider">
+          <span>Silence before send <b id="vad-window">650</b> ms</span>
+          <input type="range" id="vad-silence" min="300" max="1500" step="50" value="650">
+        </label>
+        <label class="slider">
+          <span>Mic sensitivity <b id="vad-sens-val">2.2×</b></span>
+          <input type="range" id="vad-sens" min="1.2" max="4" step="0.1" value="2.2">
+        </label>
+
+        <label class="row">
+          <span class="row-label">Road noise</span>
+          <select id="noise-preset">
+            <option value="clean" selected>Clean studio</option>
+            <option value="mandi">Mandi / auto stand</option>
+            <option value="highway">NH-44 highway</option>
+            <option value="gsm">8 kHz phone line</option>
+          </select>
+        </label>
+        <div class="row">
+          <label class="check"><input type="checkbox" id="noise-into-mic" checked> into mic</label>
+          <label class="check"><input type="checkbox" id="noise-aloud" checked> play aloud</label>
+        </div>
+
+        <div class="type-row">
+          <input id="type-say" placeholder="No mic? Type what you'd say…" autocomplete="off">
+          <button id="btn-say" class="btn-quiet">Send</button>
+        </div>
+        <p class="micro">VAD always listens to the raw mic, before any noise is mixed in.</p>
+      </div>
+    </details>
+  </section>
+
+  <!-- ------------- RIGHT: two phones on one live call line ------------- -->
+  <section class="call-scene" id="call-scene" data-phase="idle" aria-label="Live call between you and BimaVani">
+    <div class="halo" aria-hidden="true"></div>
+
+    <!-- the line that carries the voice between the two phones -->
+    <div class="call-link is-idle" id="call-link">
+      <span class="link-arrow" aria-hidden="true">◀</span>
+      <span class="link-waves" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+      <span class="link-label" id="link-label">Idle</span>
+      <span class="link-waves" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+      <span class="link-arrow" aria-hidden="true">▶</span>
+    </div>
+
+    <div class="phones">
+
+      <!-- ==================== THE CALLER — you (the driver's phone) ==================== -->
+      <div class="phone phone--caller" id="phone-caller">
+        <span class="phone-notch" aria-hidden="true"></span>
+        <div class="phone-bar">
+          <span class="phone-brand">
+            <span class="phone-avatar" aria-hidden="true">🧑</span>
+            Aap <span class="phone-tag">Driver</span>
+          </span>
+          <span class="phone-led" aria-hidden="true"></span>
+        </div>
+
+        <!-- who you are calling + live call status -->
+        <div class="contact">
+          <div class="contact-avatar" aria-hidden="true">🛣️</div>
+          <div class="contact-meta">
+            <p class="contact-name">BimaVani Roadside</p>
+            <p class="contact-num">1-800-BIMA-VANI</p>
+          </div>
+          <div class="contact-state">
+            <span id="caller-status" class="status-text">Ready to call</span>
+            <span class="status-time sync-timer">00:00</span>
+          </div>
+        </div>
+
+        <!-- what you said, as Prisma heard it -->
+        <div class="phone-card phone-card--said">
+          <button id="say-edit" class="say-edit" title="Type your turn instead">✎</button>
+          <p class="phone-label">Aap ne kaha</p>
+          <p class="phone-say" id="stt-transcript">Nothing yet — the driver's words will appear here.</p>
+          <p class="caption">The driver's words, as Gnani Prisma heard them.</p>
+        </div>
+
+        <!-- your mic: tap to talk -->
+        <div class="orb-zone">
+          <button id="btn-ptt" class="orb" aria-label="Microphone">
+            <span class="orb-core"></span>
+          </button>
+          <p id="ptt-hint" class="phone-hint">Press Call to start</p>
+        </div>
+
+        <div class="level">
+          <div class="level-track"><div id="vad-bar" class="level-fill"></div><div id="vad-thr-mark" class="level-thr"></div></div>
+          <div class="level-notes">
+            <span id="vad-live">VAD: waiting for call...</span>
+            <span id="ptt-live">PTT: off</span>
+          </div>
+        </div>
+
+        <!-- Push-to-talk only controls -->
+        <div id="ptt-controls" class="ptt-controls hidden">
+          <button id="btn-ptt-send" class="btn-quiet" disabled>Send</button>
+          <button id="btn-ptt-cancel" class="btn-quiet" disabled>Cancel</button>
+          <span id="ptt-timer" class="ptt-timer">0.0s</span>
+        </div>
+
+        <!-- Call / End: round handset buttons, like a real phone -->
+        <div class="phone-call-controls">
+          <div class="call-btn-wrap">
+            <button id="btn-dial" class="btn-call" aria-label="Call BimaVani">📞</button>
+            <span>Call</span>
+          </div>
+          <div class="call-btn-wrap">
+            <button id="btn-end" class="btn-end" aria-label="End call" disabled>⏹</button>
+            <span>End</span>
+          </div>
+        </div>
+
+        <p class="phone-foot">You · 1-800-BIMA-VANI</p>
+      </div>
+
+      <!-- ================= MIDDLE GAP — the line + turn-taking controls ================= -->
+      <div class="call-middle">
+        <div class="wire" aria-hidden="true"><i></i></div>
+        <div class="seg" role="radiogroup" aria-label="Turn taking">
+          <button class="seg-btn active" data-mode="auto_vad">Auto-VAD</button>
+          <button class="seg-btn" data-mode="push_to_talk">Push-to-talk</button>
+        </div>
+        <button id="btn-barge-in" class="btn-quiet" disabled>Interrupt</button>
+        <p class="middle-hint">Between the two handsets · keeps working mid-call</p>
+      </div>
+
+      <!-- =================== THE AGENT — BimaVani's phone =================== -->
+      <div class="phone phone--agent" id="phone-agent">
+        <span class="phone-notch" aria-hidden="true"></span>
+        <div class="phone-bar">
+          <span class="phone-brand">
+            <span class="brand-mark" aria-hidden="true">🛣️</span>
+            BimaVani <span class="phone-tag phone-tag--live">Agent</span>
+          </span>
+          <span class="phone-icons">
+            <button class="icon-btn" id="btn-barge-in-2" title="Interrupt the agent">⏹</button>
+          </span>
+        </div>
+
+        <!-- who is on the line + live call status -->
+        <div class="contact contact--agent">
+          <div class="contact-avatar" aria-hidden="true">🧑</div>
+          <div class="contact-meta">
+            <p class="contact-name">Aap · Driver</p>
+            <p class="contact-num">Roadside breakdown line</p>
+          </div>
+          <div class="contact-state">
+            <span id="agent-status" class="status-text">Standby</span>
+            <span class="status-time sync-timer">00:00</span>
+          </div>
+        </div>
+
+        <!-- what the agent says, streaming clause by clause -->
+        <div class="phone-card phone-card--agent">
+          <canvas id="waveform" width="320" height="64"></canvas>
+          <p id="agent-reply" class="phone-say">The agent will greet you here.</p>
+          <p id="call-state" class="phone-state">Not connected</p>
+        </div>
+
+        <!-- the agent's voice: is BimaVani speaking? -->
+        <div class="voice-zone">
+          <div class="agent-orb" aria-hidden="true">
+            <span class="agent-orb-core">🛣️</span>
+          </div>
+          <p id="agent-hint" class="phone-hint">Waiting for your call</p>
+        </div>
+
+        <p class="phone-foot">1-800-BIMA-VANI · synthetic demo data</p>
+
+        <!-- incoming-call screen: shown only while the phone is ringing -->
+        <div class="incoming" id="agent-incoming" aria-hidden="true">
+          <p class="incoming-label">Incoming call</p>
+          <div class="incoming-avatar"><span>🧑</span></div>
+          <p class="incoming-name">Aap</p>
+          <p class="incoming-sub">Driver · roadside breakdown</p>
+          <div class="incoming-actions">
+            <span class="act act--decline"><i>✕</i><small>Decline</small></span>
+            <span class="act act--accept" id="agent-accept"><i>📞</i><small>Accept</small></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <p class="scene-status" id="scene-status">Tap <b>Call</b> to connect the two phones.</p>
+  </section>
+</main>
+
+<!-- ================= BOTTOM BAND: flow + latency ===================== -->
+<footer class="flowband">
+  <div class="flow-head">
+    <span class="kicker">STREAMING PIPELINE</span>
+    <span id="brain-pill" class="chip-status">🧠 …</span>
+  </div>
+
+  <div class="flow-strip">
+    <div class="node" data-stage="1"><span class="node-ico">🎤</span><span class="node-name">Mic</span><span class="node-ms">—</span><span class="node-q" data-q="mic_ingest">0</span></div>
+    <span class="arrow">→</span>
+    <div class="node" data-stage="2"><span class="node-ico">🗣️</span><span class="node-name">Prisma ASR</span><span class="node-ms">—</span><span class="node-q" data-q="stt">0</span></div>
+    <span class="arrow">→</span>
+    <div class="node" data-stage="3"><span class="node-ico">⏱️</span><span class="node-name">Endpointing</span><span class="node-ms">—</span><span class="node-q" data-q="endpointing">0</span></div>
+    <span class="arrow">→</span>
+    <div class="node" data-stage="4"><span class="node-ico">🧠</span><span class="node-name">Brain</span><span class="node-ms">—</span><span class="node-q" data-q="brain">0</span></div>
+    <span class="arrow">→</span>
+    <div class="node" data-stage="5"><span class="node-ico">🧩</span><span class="node-name">Chunk buffer</span><span class="node-ms">—</span><span class="node-q" data-q="clause_buffer">0</span></div>
+    <span class="arrow">→</span>
+    <div class="node" data-stage="6"><span class="node-ico">🔊</span><span class="node-name">Timbre TTS</span><span class="node-ms">—</span><span class="node-q" data-q="tts">0</span></div>
+    <span class="arrow">→</span>
+    <div class="node" data-stage="7"><span class="node-ico">🫧</span><span class="node-name">Jitter buffer</span><span class="node-ms">—</span><span class="node-q" data-q="jitter_buffer">0</span></div>
+    <span class="arrow">→</span>
+    <div class="node" data-stage="8"><span class="node-ico">📞</span><span class="node-name">Speaker</span><span class="node-ms">—</span><span class="node-q">out</span></div>
+  </div>
+
+  <div class="latency">
+    <div class="lat-kpis">
+      <div class="lat-kpi"><b id="flow-ttfa">—</b><span>TTFA ms</span></div>
+      <div class="lat-kpi"><b id="flow-total">—</b><span>backend ms</span></div>
+      <div class="lat-kpi"><b id="flow-stt">—</b><span>STT ms</span></div>
+    </div>
+    <div id="latency-body" class="lat-body">
+      <span class="muted">Per-stage timings appear after the first turn.</span>
+    </div>
+  </div>
+
+  <p id="foot-meta" class="foot-meta"></p>
+</footer>
+
+<script src="/app.js?v=20261110m"></script>
+</body>
+</html>

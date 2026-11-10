@@ -1,0 +1,535 @@
+{
+  "_meta": {
+    "name": "BimaVani Synthetic Data Store",
+    "dpdp_notice": "100% SYNTHETIC DATA. No real persons, policies, phone numbers or vehicles. Generated for the IRDAI / DPDP-compliant BimaVani hackathon demo. Any resemblance is coincidental.",
+    "version": "1.0.0",
+    "currency": "INR"
+  },
+  "policies": {
+    "7820": {
+      "policy_number": "7820",
+      "owner": "Rohit Mehra",
+      "vehicle_make": "Maruti Suzuki",
+      "vehicle_model": "Swift VXi",
+      "vehicle_class": "four_wheeler",
+      "fuel": "petrol",
+      "registration": "HR-26-SY-8874",
+      "plan": "Zero-Dep Bumper-to-Bumper",
+      "policy_type": "comprehensive",
+      "cover_start": "2026-02-14",
+      "cover_end": "2027-02-13",
+      "idv": 520000,
+      "ncb_percent": 20,
+      "zero_depreciation": true,
+      "rsa_plan": "Gold (50 km free flatbed towing)",
+      "home_city": "Karnal",
+      "preferred_garage": "g_karnal_motors",
+      "engine_capacity_cc": 1197
+    },
+    "4491": {
+      "policy_number": "4491",
+      "owner": "Anjali Sharma",
+      "vehicle_make": "Honda",
+      "vehicle_model": "Activa 6G",
+      "vehicle_class": "two_wheeler",
+      "fuel": "petrol",
+      "registration": "DL-3-BA-1129",
+      "plan": "Zero-Dep Scooter Shield",
+      "policy_type": "comprehensive",
+      "cover_start": "2026-04-01",
+      "cover_end": "2027-03-31",
+      "idv": 78000,
+      "ncb_percent": 20,
+      "zero_depreciation": true,
+      "rsa_plan": "Silver (on-spot 2-wheeler mechanic)",
+      "home_city": "New Delhi",
+      "preferred_garage": "g_karol_bagh_2w",
+      "engine_capacity_cc": 110
+    },
+    "1055": {
+      "policy_number": "1055",
+      "owner": "Vikram Yadav",
+      "vehicle_make": "Hero",
+      "vehicle_model": "Splendor+",
+      "vehicle_class": "two_wheeler",
+      "fuel": "petrol",
+      "registration": "UP-16-KL-4410",
+      "plan": "Zero-Dep Bike Shield",
+      "policy_type": "comprehensive",
+      "cover_start": "2026-01-10",
+      "cover_end": "2027-01-09",
+      "idv": 66500,
+      "ncb_percent": 20,
+      "zero_depreciation": true,
+      "rsa_plan": "Silver (on-spot 2-wheeler mechanic)",
+      "home_city": "Meerut",
+      "preferred_garage": "g_meerut_2w",
+      "engine_capacity_cc": 112
+    },
+    "9932": {
+      "policy_number": "9932",
+      "owner": "Gurpreet Singh",
+      "vehicle_make": "Mahindra",
+      "vehicle_model": "Bolero Standard",
+      "vehicle_class": "four_wheeler",
+      "fuel": "diesel",
+      "registration": "HR-05-EK-2093",
+      "plan": "Commercial Utility Standard",
+      "policy_type": "comprehensive",
+      "cover_start": "2026-03-05",
+      "cover_end": "2027-03-04",
+      "idv": 610000,
+      "ncb_percent": 20,
+      "zero_depreciation": false,
+      "rsa_plan": "Bronze (RSA + reimbursement towing)",
+      "home_city": "Panipat",
+      "preferred_garage": "g_panipat_motors",
+      "engine_capacity_cc": 1537
+    },
+    "3310": {
+      "policy_number": "3310",
+      "owner": "Meera Iyer",
+      "vehicle_make": "Tata",
+      "vehicle_model": "Nexon EV Max",
+      "vehicle_class": "four_wheeler",
+      "fuel": "electric",
+      "registration": "TN-09-DX-7715",
+      "plan": "Zero-Dep EV Shield",
+      "policy_type": "comprehensive",
+      "cover_start": "2026-06-20",
+      "cover_end": "2027-06-19",
+      "idv": 1180000,
+      "ncb_percent": 20,
+      "zero_depreciation": true,
+      "rsa_plan": "Gold EV (charge-assist + 50 km flatbed)",
+      "home_city": "Chennai",
+      "preferred_garage": "g_chennai_ev",
+      "engine_capacity_cc": 0
+    }
+  },
+  "parts_catalog": {
+    "radiator": {
+      "display_en": "Radiator burst / coolant leak",
+      "display_hi": "raidiyatar phat gaya hai",
+      "safety": "non_drivable",
+      "workflow": "B",
+      "base_cost_inr": [
+        10500,
+        12800
+      ],
+      "depreciation_pct": 40,
+      "keywords_en": [
+        "radiator",
+        "coolant",
+        "garam",
+        "steam",
+        "smoke",
+        "overheat",
+        "circulated",
+        "leak"
+      ],
+      "keywords_hi": [
+        "radiyatar",
+        "radiator",
+        "raidiyatar",
+        "coolant",
+        "bhaap",
+        "paani",
+        "geyar",
+        "overheat",
+        "leak",
+        "kulaint"
+      ]
+    },
+    "bumper": {
+      "display_en": "Front/rear bumper dent",
+      "display_hi": "bamper mein dant aa gaya hai",
+      "safety": "drivable_minor",
+      "workflow": "C",
+      "base_cost_inr": [
+        2800,
+        4200
+      ],
+      "depreciation_pct": 25,
+      "zero_dep_zero_cost": true,
+      "keywords_en": [
+        "bumper",
+        "dent",
+        "cratch",
+        "scratch"
+      ],
+      "keywords_hi": [
+        "bamper",
+        "bumper",
+        "dant",
+        "cratch",
+        "ladi",
+        "dent"
+      ]
+    },
+    "headlight": {
+      "display_en": "Headlight / indicator broken",
+      "display_hi": "haedalait toot gayi hai",
+      "safety": "drivable_minor",
+      "workflow": "C",
+      "base_cost_inr": [
+        2200,
+        3600
+      ],
+      "depreciation_pct": 30,
+      "zero_dep_zero_cost": true,
+      "keywords_en": [
+        "headlight",
+        "head lamp",
+        "indicator",
+        "light broken"
+      ],
+      "keywords_hi": [
+        "headlight",
+        "haedalait",
+        "batti"
+      ]
+    },
+    "side_mirror": {
+      "display_en": "Side mirror broken",
+      "display_hi": "shaayad mirror toot gaya",
+      "safety": "drivable_minor",
+      "workflow": "C",
+      "base_cost_inr": [
+        1400,
+        2600
+      ],
+      "depreciation_pct": 30,
+      "zero_dep_zero_cost": true,
+      "keywords_en": [
+        "mirror",
+        "orel",
+        "rear view"
+      ],
+      "keywords_hi": [
+        "mirror",
+        "mirar",
+        "sheesha"
+      ]
+    },
+    "axle": {
+      "display_en": "Axle / suspension bent",
+      "display_hi": "eksal mein twist aa gaya",
+      "safety": "non_drivable",
+      "workflow": "B",
+      "base_cost_inr": [
+        8900,
+        12400
+      ],
+      "depreciation_pct": 35,
+      "keywords_en": [
+        "axle",
+        "wheel bent",
+        "suspension",
+        "shaking"
+      ],
+      "keywords_hi": [
+        "axel",
+        "axle",
+        "eksal",
+        "aakshl",
+        "twist",
+        "kaap rahe"
+      ]
+    },
+    "puncture": {
+      "display_en": "Tyre puncture (minor RSA)",
+      "display_hi": "paunchhar ho gaya hai",
+      "safety": "minor_breakdown",
+      "workflow": "A",
+      "base_cost_inr": [
+        350,
+        900
+      ],
+      "depreciation_pct": 0,
+      "do_not_claim": true,
+      "keywords_en": [
+        "puncture",
+        "flat tyre",
+        "tyre flat",
+        "air"
+      ],
+      "keywords_hi": [
+        "punchchar",
+        "puncher",
+        "puncture",
+        "paunchhar",
+        "hawa",
+        "taayar",
+        "panchar",
+        "havaa"
+      ]
+    },
+    "battery": {
+      "display_en": "Battery dead (minor RSA)",
+      "display_hi": "battery khatam ho gayi hai",
+      "safety": "minor_breakdown",
+      "workflow": "A",
+      "base_cost_inr": [
+        2800,
+        4600
+      ],
+      "depreciation_pct": 50,
+      "do_not_claim": true,
+      "keywords_en": [
+        "battery",
+        "dead",
+        "not starting",
+        "self off"
+      ],
+      "keywords_hi": [
+        "battery",
+        "batteri",
+        "self nahi",
+        "start nahi",
+        "staart",
+        "staart nahin",
+        "baitari",
+        "ded"
+      ]
+    },
+    "front_guard": {
+      "display_en": "Front guard / side panel scrape",
+      "display_hi": "aage wala gard kharaab",
+      "safety": "drivable_minor",
+      "workflow": "C",
+      "base_cost_inr": [
+        1900,
+        3100
+      ],
+      "depreciation_pct": 30,
+      "zero_dep_zero_cost": true,
+      "keywords_en": [
+        "guard",
+        "panel",
+        "side swipe",
+        "scrape"
+      ],
+      "keywords_hi": [
+        "gard",
+        "guard",
+        "ragad"
+      ]
+    },
+    "clutch_wire": {
+      "display_en": "Clutch wire snapped (minor RSA)",
+      "display_hi": "klach taar kat gayi",
+      "safety": "minor_breakdown",
+      "workflow": "A",
+      "base_cost_inr": [
+        400,
+        1100
+      ],
+      "depreciation_pct": 0,
+      "do_not_claim": true,
+      "keywords_en": [
+        "clutch wire",
+        "clutch",
+        "gear stuck"
+      ],
+      "keywords_hi": [
+        "clutch",
+        "klach",
+        "taar",
+        "kat"
+      ]
+    },
+    "fuel_out": {
+      "display_en": "Out of fuel (minor RSA)",
+      "display_hi": "petrol khatam ho gaya",
+      "safety": "minor_breakdown",
+      "workflow": "A",
+      "base_cost_inr": [
+        0,
+        0
+      ],
+      "depreciation_pct": 0,
+      "do_not_claim": true,
+      "keywords_en": [
+        "fuel",
+        "petrol over",
+        "no petrol",
+        "diesel over"
+      ],
+      "keywords_hi": [
+        "petrol khatam",
+        "fuel",
+        "khatam",
+        "khatm"
+      ]
+    },
+    "ev_system_stuck": {
+      "display_en": "EV system fault / drive disabled",
+      "display_hi": "EV system rok raha hai",
+      "safety": "non_drivable",
+      "workflow": "B",
+      "base_cost_inr": [
+        15000,
+        26000
+      ],
+      "depreciation_pct": 15,
+      "keywords_en": [
+        "ev",
+        "electric",
+        "system fault",
+        "traction",
+        "not moving"
+      ],
+      "keywords_hi": [
+        "ev",
+        "electric",
+        "system",
+        "chla nahi",
+        "rok"
+      ]
+    }
+  },
+  "cashless_garages": [
+    {
+      "id": "g_karnal_motors",
+      "name": "Karnal Motors Pvt Ltd",
+      "city": "Karnal",
+      "road_type": "NH",
+      "highway": "NH-44",
+      "km_marker": "126",
+      "cashless": true,
+      "network": "MDRT-CASHLESS-NET",
+      "services_2w": false,
+      "services_ev": false,
+      "phone": "090-SYN-001"
+    },
+    {
+      "id": "g_karol_bagh_2w",
+      "name": "Karol Bagh Auto Care 2W",
+      "city": "New Delhi",
+      "road_type": "CITY",
+      "highway": null,
+      "km_marker": null,
+      "cashless": true,
+      "network": "MDRT-CASHLESS-NET",
+      "services_2w": true,
+      "services_ev": false,
+      "phone": "090-SYN-002"
+    },
+    {
+      "id": "g_meerut_2w",
+      "name": "Meerut Sthal Two-Wheeler Hub",
+      "city": "Meerut",
+      "road_type": "CITY",
+      "highway": null,
+      "km_marker": null,
+      "cashless": true,
+      "network": "MDRT-CASHLESS-NET",
+      "services_2w": true,
+      "services_ev": false,
+      "phone": "090-SYN-003"
+    },
+    {
+      "id": "g_panipat_motors",
+      "name": "Panipat Truk & SUV Works",
+      "city": "Panipat",
+      "road_type": "NH",
+      "highway": "NH-44",
+      "km_marker": "96",
+      "cashless": true,
+      "network": "MDRT-CASHLESS-NET",
+      "services_2w": false,
+      "services_ev": false,
+      "phone": "090-SYN-004"
+    },
+    {
+      "id": "g_chennai_ev",
+      "name": "Chennai EV Care (Tata Authorised)",
+      "city": "Chennai",
+      "road_type": "CITY",
+      "highway": null,
+      "km_marker": null,
+      "cashless": true,
+      "network": "MDRT-CASHLESS-NET",
+      "services_2w": false,
+      "services_ev": true,
+      "phone": "090-SYN-005"
+    },
+    {
+      "id": "g_rural_karnal_link",
+      "name": "Karnal Link Road Workshop (Reimb. Only)",
+      "city": "Karnal Rural",
+      "road_type": "RURAL",
+      "highway": "Karnal-Assandh Link Road",
+      "km_marker": null,
+      "cashless": false,
+      "network": "REIMBURSEMENT-ONLY",
+      "services_2w": true,
+      "services_ev": false,
+      "phone": "090-SYN-006"
+    }
+  ],
+  "rsa_workflows": {
+    "A_minor_breakdown": {
+      "label": "Workflow A — Minor Breakdown (NCB Saver)",
+      "vendor_eta_mins": 22,
+      "vendor": "On-Spot 2-Wheeler Bike Mechanic",
+      "protects_ncb": true
+    },
+    "B_non_drivable": {
+      "label": "Workflow B — Non-Drivable Crash",
+      "vendor_eta_mins": 38,
+      "vendor": "Free RSA Flatbed Tow Truck (up to 50 km)",
+      "protects_ncb": false,
+      "nhai_patrol_1033": true
+    },
+    "C_drivable_minor": {
+      "label": "Workflow C — Drivable Minor Crash",
+      "vendor_eta_mins": 0,
+      "vendor": "Self-drive to nearest Cashless Network Garage",
+      "protects_ncb": false,
+      "photos_required": 4
+    }
+  },
+  "emergency": {
+    "ambulance": "112",
+    "nhai_highway_patrol": "1033",
+    "injury_keywords_en": [
+      "injured",
+      "blood",
+      "bleeding",
+      "head injury",
+      "unconscious",
+      "fracture",
+      "ambulance",
+      "hospital",
+      "hurt",
+      "injury"
+    ],
+    "injury_keywords_hi": [
+      "chot",
+      "choat",
+      "khoon",
+      "khun",
+      "khuun",
+      "behosh",
+      "haddi",
+      "fracture",
+      "hospital",
+      "ambulance",
+      "sar me",
+      "sar me lag",
+      "hosh mat"
+    ]
+  },
+  "irdai_rules": {
+    "compulsory_deductible_inr": {
+      "two_wheeler": 100,
+      "four_wheeler": 1000
+    },
+    "rural_towing_reimbursement_inr": 1500,
+    "free_tow_km_limit": 50,
+    "rural_eta_hours_threshold": 2,
+    "range_label": "Estimated Range Subject to Surveyor Inspection — Not Final Approval"
+  }
+}

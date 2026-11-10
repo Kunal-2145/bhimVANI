@@ -1,0 +1,10 @@
+# BimaVani (बीमा-वाणी) — Voice-First RSA + IRDAI Claim Desk
+fastapi
+uvicorn[standard]
+websockets
+httpx
+python-dotenv
+python-multipart
+pydantic
+pytest
+gnani-vachana

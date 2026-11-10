@@ -1,0 +1,31 @@
+# Secrets
+.env
+*.env
+!.env.example
+GNANI_API_KEY*
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Cache (keep dir, ignore contents)
+backend/cache/tts/*.wav
+
+# Runtime / eval artifacts
+backend/eval_results.json
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Node (not used, safe anyway)
+node_modules/
