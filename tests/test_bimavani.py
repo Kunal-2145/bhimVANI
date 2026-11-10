@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import math
 import struct
 from pathlib import Path
 from typing import Any, Dict
@@ -1166,6 +1167,151 @@ def test_negation_drivability_marathi_lock_and_ws_error_resilience(monkeypatch):
                 assert ws.receive_json()["type"] == "pong"
     finally:
         BRAIN.persist_history = orig_persist
+
+
+# ===========================================================================
+# Production Voice Engineering Layers: RIFF Fix, PLC, 80Hz DSP, Adaptive VAD,
+# DPDP PII Redaction & Rolling p50/p95 SLO Telemetry
+# ===========================================================================
+
+def test_wav_header_riff_sample_count_fix_plc_and_output_prebuffer():
+    from backend.pipeline.jitter_buffer import InputJitterBuffer, OutputJitterBuffer
+
+    ij = InputJitterBuffer(sample_rate=16000, target_jitter_ms=40)
+    speech = _pcm_frame(4500)
+    # seq=2 missing -> triggers 1 attenuated PLC frame once seq 3,4 arrive
+    for seq in (0, 1, 3, 4, 5, 6):
+        ij.push(speech, seq=seq)
+    snap_int = ij.dump_interruption_snapshot()
+    wav_int = snap_int["wav"]
+    assert len(wav_int) > 44
+    assert struct.unpack_from("<I", wav_int, 4)[0] == len(wav_int) - 8
+    assert struct.unpack_from("<I", wav_int, 40)[0] == len(wav_int) - 44
+
+    wav_utt = ij.take_utterance_wav(include_preroll_if_empty=True)
+    assert struct.unpack_from("<I", wav_utt, 4)[0] == len(wav_utt) - 8
+    assert struct.unpack_from("<I", wav_utt, 40)[0] == len(wav_utt) - 44
+    assert ij.packets_lost == 1
+    assert ij.plc_frames == 1
+
+    # OutputJitterBuffer strict 120ms prebuffer gating before drain
+    oj = OutputJitterBuffer(prebuffer_ms=120.0)
+    short_wav = gnani_client.make_wav_header(960, sample_rate=24000) + b"\x10\x00" * 960  # 40ms
+    push1 = oj.push(1, short_wav)
+    assert push1["prebuffer_met"] is False
+    assert oj.drain_ready(force=False) == []  # gated until >= 120ms
+    oj.push(2, short_wav)
+    oj.push(3, short_wav)
+    push3 = oj.push(4, short_wav)
+    assert push3["prebuffer_met"] is True
+    drained = oj.drain_ready(force=False)
+    assert [c.clause_index for c in drained] == [1, 2, 3, 4]
+
+
+def test_80hz_highpass_dsp_and_adaptive_noise_floor_vad():
+    from backend.pipeline.endpointing import AutoVADDetector, denoise_wav_for_stt
+
+    # 1. 50 Hz diesel rumble gets attenuated strongly; 1000 Hz speech formant stays intact
+    samples_50 = [int(14000 * math.sin(2 * math.pi * 50.0 * i / 16000)) for i in range(1600)]
+    wav_50 = gnani_client.wrap_pcm_as_wav(struct.pack(f"<{len(samples_50)}h", *samples_50), sample_rate=16000)
+    _, meta_50 = denoise_wav_for_stt(wav_50)
+    assert meta_50["dsp_applied"] is True
+    assert meta_50["attenuation_db"] >= 4.0
+
+    samples_1k = [int(14000 * math.sin(2 * math.pi * 1000.0 * i / 16000)) for i in range(1600)]
+    wav_1k = gnani_client.wrap_pcm_as_wav(struct.pack(f"<{len(samples_1k)}h", *samples_1k), sample_rate=16000)
+    _, meta_1k = denoise_wav_for_stt(wav_1k)
+    assert meta_1k["attenuation_db"] <= 1.0
+
+    # 2. Adaptive noise floor resists continuous -28 dBFS engine drone, still detects -12 dBFS speech
+    vad = AutoVADDetector(sample_rate=16000, vad_silence_ms=600)
+    engine_drone = _pcm_frame(1300)  # ~ -28.0 dBFS steady noise (> -34 dBFS base)
+    loud_speech = _pcm_frame(8200)   # ~ -12.0 dBFS driver speaking above noise
+    drone_evs = [vad.feed(engine_drone) for _ in range(20)]
+    assert "speech" not in drone_evs
+    assert vad.noise_floor_dbfs > -40.0
+
+    speech_evs = [vad.feed(loud_speech) for _ in range(15)]
+    assert "speech" in speech_evs
+    end_evs = [vad.feed(engine_drone) for _ in range(40)]
+    assert "endpoint" in end_evs
+
+
+def test_dpdp_pii_redaction_and_safe_history_persistence(monkeypatch, tmp_path):
+    from backend.pipeline import brain as brain_mod
+    from backend.pipeline.safety import redact_pii
+
+    raw = "Aadhaar 1234 5678 9012, PAN ABCDE1234F, call +91 98765 43210 or raj@demo.in, NH-44 policy 7820 ₹12,300"
+    clean, count = redact_pii(raw)
+    assert count == 4
+    assert "1234 5678 9012" not in clean and "XXXX-XXXX-9012" in clean
+    assert "ABCDE1234F" not in clean and "[PAN_REDACTED]" in clean
+    assert "98765" not in clean and "[PHONE_REDACTED]" in clean
+    assert "raj@demo.in" not in clean and "[EMAIL_REDACTED]" in clean
+    assert "7820" in clean and "NH-44" in clean and "₹12,300" in clean
+
+    temp_hist = tmp_path / "call_history.json"
+    monkeypatch.setattr(brain_mod, "_MEMORY_PATH", temp_hist)
+
+    async def _run():
+        b = Brain(persist_history=True)
+        await b.start_call("pii-test-01")
+        r = await b.process_turn(
+            "pii-test-01",
+            "NH-44 crash radiator phat gaya, policy 7820, mera mobile 9876543210 aur PAN ABCDE1234F hai",
+        )
+        assert r["pii_redactions"] >= 2
+        b.reset_call("pii-test-01")
+
+    asyncio.run(_run())
+    saved = json.loads(temp_hist.read_text(encoding="utf-8"))
+    saved_text = json.dumps(saved)
+    assert "9876543210" not in saved_text
+    assert "ABCDE1234F" not in saved_text
+    assert "7820" in saved_text
+
+
+def test_rolling_slo_telemetry_and_multilingual_eval_matrix():
+    orig_persist = BRAIN.persist_history
+    BRAIN.persist_history = False
+    try:
+        with TestClient(app) as client:
+            with client.websocket_connect("/ws/call/ws-slo-01") as ws:
+                assert ws.receive_json()["type"] == "ready"
+                ws.send_json({"type": "start"})
+                while ws.receive_json()["type"] != "turn_complete":
+                    pass
+                ws.send_json({
+                    "type": "end_turn",
+                    "transcript_override": "NH-44 highway crash radiator phat gaya policy 7820",
+                })
+                tc = None
+                while True:
+                    m = ws.receive_json()
+                    if m["type"] == "turn_complete":
+                        tc = m
+                        break
+                assert tc is not None
+                slo = tc["pipeline"]["slo"]
+                assert slo["turns_total"] >= 1
+                assert slo["percentiles"]["ttfa_ms"]["count"] >= 1
+                ws.send_json({"type": "end_call"})
+                ws.receive_json()
+
+            h = client.get("/api/health").json()
+            assert h["dsp_filter"] == "highpass_80hz"
+            assert h["slo"]["turns_total"] >= 1
+
+            ps = client.get("/api/pipeline-state").json()
+            assert "global_slo" in ps and "ttfa_ms" in ps["global_slo"]["percentiles"]
+    finally:
+        BRAIN.persist_history = orig_persist
+
+    res = asyncio.run(eval_runner.run_eval_suite(persist_history=False))
+    assert res["summary"]["multilingual_10lang_cases"] == 30
+    assert res["summary"]["multilingual_10lang_accuracy"] == 1.0
+    assert res["summary"]["engineering_checks"]["all_passed"] is True
+
 
 
 

@@ -51,6 +51,7 @@ from backend.rsa_and_claim_rules import (
     triage_injury_and_safety,
 )
 from backend.pipeline.clause_buffer import ClauseBatch, ClauseBuffer, split_into_clauses
+from backend.pipeline.safety import redact_pii, redact_structure
 from backend.translit import detect_script_language, normalize_for_matching
 
 _MEMORY_PATH = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) / "data" / "call_history.json"
@@ -251,6 +252,9 @@ def save_long_term(records: List[Dict[str, Any]]) -> None:
 
 
 def append_long_term(record: Dict[str, Any]) -> None:
+    sanitized_record, redactions = redact_structure(record)
+    if redactions and isinstance(sanitized_record, dict):
+        sanitized_record["pii_redactions"] = redactions
     with _HISTORY_LOCK:
         recs: List[Dict[str, Any]] = []
         try:
@@ -261,7 +265,7 @@ def append_long_term(record: Dict[str, Any]) -> None:
                         recs = loaded
         except Exception:
             recs = []
-        recs.append(record)
+        recs.append(sanitized_record)
         try:
             _MEMORY_PATH.parent.mkdir(parents=True, exist_ok=True)
             with open(_MEMORY_PATH, "w", encoding="utf-8") as fh:
@@ -377,6 +381,8 @@ async def llm_assist(transcript: str, context: Dict[str, Any],
     if not key or time.time() < _LLM_COOLDOWN_UNTIL:
         return None
     try:
+        safe_ctx, _ = redact_structure(context)
+        safe_transcript, _ = redact_pii(transcript)
         async with httpx.AsyncClient(timeout=timeout_s) as client:
             resp = await client.post(
                 f"{base}/chat/completions",
@@ -388,8 +394,8 @@ async def llm_assist(transcript: str, context: Dict[str, Any],
                         {"role": "system", "content": _AGENT_SYSTEM},
                         {"role": "user",
                          "content": "CONTEXT (ground truth):\n"
-                                    f"{json.dumps(context, ensure_ascii=False, default=str)}\n\n"
-                                    f'DRIVER SAID: "{transcript}"\n'
+                                    f"{json.dumps(safe_ctx, ensure_ascii=False, default=str)}\n\n"
+                                    f'DRIVER SAID: "{safe_transcript}"\n'
                                     "Decide the single best next spoken turn and return JSON."},
                     ],
                     "temperature": 0.4,
@@ -876,6 +882,7 @@ class Brain:
             c["language"] = lang
         self.batches[call_id] = batch
 
+        _, pii_redactions = redact_pii(transcript or "")
         if self.persist_history:
             record = {
                 "call_id": call_id,
@@ -900,6 +907,7 @@ class Brain:
             "reply_text": reply,
             "clauses": batch.as_list(),
             "ticket_status": mem.ticket_status,
+            "pii_redactions": pii_redactions,
         }
 
     # ------------------------------------------------------------------

@@ -1,18 +1,114 @@
 """
-BimaVani — G3 Guardrail: Bounded Queues with Backpressure Telemetry
-===================================================================
+BimaVani — G3 Guardrail: Bounded Queues, Session Isolation & Rolling SLOs
+===========================================================================
 Every hop of the 8-stage pipeline passes through a bounded asyncio.Queue
-(maxsize=32). Queue depth + drop + backpressure stats stream to the UI
-so judges SEE the backpressure engineering live.
+(maxsize=32). Queue depth, drop/backpressure stats, and rolling p50/p95
+latency SLOs (TTFA, STT, Brain, TTS, Barge-In Flush, TTS cache efficiency)
+stream live to `/api/health`, `/api/pipeline-state`, and the call UI.
 """
 from __future__ import annotations
 
 import asyncio
+import math
 import time
+from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Deque, Dict, List, Optional
 
 MAX_QUEUE_SIZE = 32                      # bounded backpressure window
+
+
+def _percentile(values: List[float], pct: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    idx = min(len(ordered) - 1, max(0, int(math.ceil(pct * len(ordered))) - 1))
+    return round(ordered[idx], 1)
+
+
+class LatencyTracker:
+    """Bounded rolling ring (maxlen=200) tracking p50/p95 SLOs & counters."""
+
+    METRICS = (
+        "ttfa_ms",
+        "stt_ms",
+        "brain_ms",
+        "tts_ms",
+        "barge_in_flush_ms",
+        "total_turn_ms",
+    )
+
+    def __init__(self, maxlen: int = 200) -> None:
+        self.maxlen = maxlen
+        self._samples: Dict[str, Deque[float]] = {
+            k: deque(maxlen=maxlen) for k in self.METRICS
+        }
+        self.turns_total = 0
+        self.tts_cache_hits = 0
+        self.tts_cache_misses = 0
+        self.fallback_turns = 0
+        self.barge_ins_total = 0
+        self.pii_redactions = 0
+
+    def record(self, metric: str, ms: float) -> None:
+        if metric in self._samples and ms is not None:
+            self._samples[metric].append(max(0.0, float(ms)))
+
+    def record_turn(
+        self,
+        *,
+        ttfa_ms: Optional[float] = None,
+        stt_ms: Optional[float] = None,
+        brain_ms: Optional[float] = None,
+        tts_ms: Optional[float] = None,
+        total_turn_ms: Optional[float] = None,
+        cache_hits: int = 0,
+        cache_misses: int = 0,
+        fallback: bool = False,
+        pii_redactions: int = 0,
+    ) -> None:
+        self.turns_total += 1
+        if ttfa_ms is not None:
+            self.record("ttfa_ms", ttfa_ms)
+        if stt_ms is not None:
+            self.record("stt_ms", stt_ms)
+        if brain_ms is not None:
+            self.record("brain_ms", brain_ms)
+        if tts_ms is not None:
+            self.record("tts_ms", tts_ms)
+        if total_turn_ms is not None:
+            self.record("total_turn_ms", total_turn_ms)
+        self.tts_cache_hits += max(0, int(cache_hits))
+        self.tts_cache_misses += max(0, int(cache_misses))
+        if fallback:
+            self.fallback_turns += 1
+        self.pii_redactions += max(0, int(pii_redactions))
+
+    def record_barge_in(self, flush_ms: float) -> None:
+        self.barge_ins_total += 1
+        self.record("barge_in_flush_ms", flush_ms)
+
+    def snapshot(self) -> Dict[str, Any]:
+        percentiles: Dict[str, Dict[str, Any]] = {}
+        for k, dq in self._samples.items():
+            vals = list(dq)
+            percentiles[k] = {
+                "count": len(vals),
+                "p50": _percentile(vals, 0.50),
+                "p95": _percentile(vals, 0.95),
+                "last": round(vals[-1], 1) if vals else 0.0,
+            }
+        total_tts = self.tts_cache_hits + self.tts_cache_misses
+        return {
+            "turns_total": self.turns_total,
+            "barge_ins_total": self.barge_ins_total,
+            "fallback_turns": self.fallback_turns,
+            "tts_cache_hits": self.tts_cache_hits,
+            "tts_cache_misses": self.tts_cache_misses,
+            "tts_cache_hit_rate": round(self.tts_cache_hits / total_tts, 3) if total_tts else 0.0,
+            "pii_redactions": self.pii_redactions,
+            "percentiles": percentiles,
+        }
 
 
 @dataclass
@@ -180,6 +276,7 @@ class SessionPipeline:
         self.endpoint_state = EndpointingState(mode="auto_vad")
         self.input_jitter = InputJitterBuffer()
         self.output_jitter = OutputJitterBuffer()
+        self.metrics = LatencyTracker(maxlen=100)
         self.active_agent_reply: str = ""
         self.language: str = ""
         self.stt_language: str = ""
@@ -209,6 +306,7 @@ class SessionPipeline:
             "stages_ms": self.stages_snapshot(),
             "input_jitter": self.input_jitter.snapshot(),
             "output_jitter": self.output_jitter.snapshot(),
+            "slo": self.metrics.snapshot(),
             "last_active_at": round(self.last_active_at, 2),
         }
 
@@ -266,4 +364,4 @@ class SessionRegistry:
 
 BUS = PipelineBus()
 REGISTRY = SessionRegistry()
-
+METRICS = LatencyTracker(maxlen=200)
