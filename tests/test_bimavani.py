@@ -782,18 +782,30 @@ def test_gnani_client_and_api_native_tamil_stt_tts_routing(monkeypatch):
     monkeypatch.setattr(httpx, "AsyncClient", _MockClient)
 
     async def _check():
+        # indic-auto without restricting candidates lets prisma-v3.0 detect all 10 Gnani languages
         stt_auto = await gnani_client.transcribe_wav(gnani_client.fallback_tts_wav("ta"), language_code="indic-auto")
         assert captured["stt_data"]["model"] == "prisma-v3.0"
         assert captured["stt_data"]["language_code"] == "indic-auto"
-        assert "ta-IN" in captured["stt_data"]["language_candidates"]
+        assert "multi_lang_codes" not in captured["stt_data"]
         assert stt_auto["transcript"] == "ரேடியேட்டர் உடைஞ்சிடுச்சு"
+        assert stt_auto["language"] == "ta-IN"
+
+        # When 2-4 candidates are passed, sends Gnani SDK field `multi_lang_codes`
+        await gnani_client.transcribe_wav(
+            gnani_client.fallback_tts_wav("te"),
+            language_code="indic-auto",
+            language_candidates="hi-IN,ta-IN,te-IN,en-IN",
+        )
+        assert captured["stt_data"]["multi_lang_codes"] == "hi-IN,ta-IN,te-IN,en-IN"
 
         stt_ta = await gnani_client.transcribe_wav(gnani_client.fallback_tts_wav("ta"), language_code="ta-IN")
-        assert captured["stt_data"]["preferred_language"] == "ta-IN"
+        assert captured["stt_data"]["model"] == "prisma-v3.0"
+        assert captured["stt_data"]["language_code"] == "ta-IN"
         assert stt_ta["language"] == "ta-IN"
 
         tts_ta = await gnani_client.synthesize_speech("நல்லவேளை, நீங்கள் பாதுகாப்பாக இருக்கிறீர்கள்.", language="ta-IN", use_cache=False)
         assert captured["tts_json"]["language"] == "ta-IN"
+        assert captured["tts_json"]["voice"] == "Asmita"
         assert tts_ta["language"] == "ta-IN"
 
     asyncio.run(_check())
@@ -838,5 +850,244 @@ def test_gnani_client_and_api_native_tamil_stt_tts_routing(monkeypatch):
                 ws.receive_json()
     finally:
         BRAIN.persist_history = orig_persist
+
+
+# ===========================================================================
+# All 10 Gnani Languages (hi/ta/te/kn/ml/bn/mr/gu/pa/en) + indic-auto E2E
+# ===========================================================================
+
+_ALL_10_SAMPLES = {
+    "hi-IN": {
+        "safe_nh": "Haan safe hain, NH-44 highway par radiator phat gaya hai, policy 7820",
+        "minor_city": "Delhi mein battery dead ho gayi hai, koi chot nahi",
+        "confirm": "Haan confirm kar do",
+        "injury": "Accident ho gaya, sar mein chot aur khoon beh raha hai",
+    },
+    "ta-IN": {
+        "safe_nh": "வணக்கம், எங்களுக்கு காயமில்லை, தேசிய நெடுஞ்சாலையில் ரேடியேட்டர் உடைஞ்சிடுச்சு, பாலிசி 7820",
+        "minor_city": "சென்னை நகரத்தில் பேட்டரி பழுதாகிடுச்சு, காயமில்லை",
+        "confirm": "ஆமாம் உறுதி செய்யுங்க",
+        "injury": "விபத்து, இரத்தம் வருது காயம் ஏற்பட்டது",
+    },
+    "te-IN": {
+        "safe_nh": "నమస్కారం, మాకు గాయం లేదు, జాతీయ రహదారిపై రేడియేటర్ పాడైపోయింది, పాలసీ 7820",
+        "minor_city": "హైదరాబాద్ నగరంలో బ్యాటరీ పాడైంది, గాయం లేదు",
+        "confirm": "అవును నిర్ధారించండి",
+        "injury": "యాక్సిడెంట్ అయింది, రక్తం వస్తోంది గాయమైంది",
+    },
+    "kn-IN": {
+        "safe_nh": "ನಮಸ್ಕಾರ, ಯಾರಿಗೂ ಗಾಯ ಇಲ್ಲ, ರಾಷ್ಟ್ರೀಯ ಹೆದ್ದಾರಿಯಲ್ಲಿ ರೇಡಿಯೇಟರ್ ಹಾಳಾಗಿದೆ, ಪಾಲಿಸಿ 7820",
+        "minor_city": "ಬೆಂಗಳೂರು ನಗರದಲ್ಲಿ ಬ್ಯಾಟರಿ ಹಾಳಾಗಿದೆ, ಗಾಯ ಇಲ್ಲ",
+        "confirm": "ಹೌದು ದೃಢೀಕರಿಸಿ",
+        "injury": "ಅಪಘಾತ ಆಗಿದೆ, ರಕ್ತ ಬರುತ್ತಿದೆ ಗಾಯವಾಗಿದೆ",
+    },
+    "ml-IN": {
+        "safe_nh": "നമസ്കാരം, ആർക്കും പരിക്കില്ല, ദേശീയപാതയിൽ റേഡിയേറ്റർ തകരാറായി, പോളിസി 7820",
+        "minor_city": "കൊച്ചി നഗരത്തിൽ ബാറ്ററി തീർന്നു, പരിക്കില്ല",
+        "confirm": "അതെ സ്ഥിരീകരിക്കൂ",
+        "injury": "അപകടം പറ്റി, രക്തം വരുന്നു പരിക്കേറ്റു",
+    },
+    "bn-IN": {
+        "safe_nh": "নমস্কার, কারও চোট লাগেনি, জাতীয় সড়কে রেডিয়েটর খারাপ হয়ে গেছে, পলিসি 7820",
+        "minor_city": "কলকাতা শহরে ব্যাটারি শেষ হয়েছে, চোট লাগেনি",
+        "confirm": "হ্যাঁ নিশ্চিত করুন",
+        "injury": "দুর্ঘটনা হয়েছে, রক্ত পড়ছে আঘাত লেগেছে",
+    },
+    "mr-IN": {
+        "safe_nh": "नमस्कार, कोणालाही जखम नाही, राष्ट्रीय महामार्गावर रेडिएटर फुटला आहे, पॉलिसी 7820",
+        "minor_city": "पुणे शहरात बॅटरी खराब झाली आहे, जखम नाही",
+        "confirm": "होय निश्चित करा",
+        "injury": "अपघात झाला, रक्त येतंय दुखापत झाली",
+    },
+    "gu-IN": {
+        "safe_nh": "નમસ્તે, કોઈને ઈજા નથી, નેશનલ હાઇવે પર રેડિએટર તૂટી ગયું છે, પોલિસી 7820",
+        "minor_city": "અમદાવાદ શહેરમાં બેટરી ખરાબ થઈ છે, ઈજા નથી",
+        "confirm": "હા પાકું કરો",
+        "injury": "અકસ્માત થયો છે, લોહી નીકળે છે ઈજા થઈ",
+    },
+    "pa-IN": {
+        "safe_nh": "ਸਤ ਸ੍ਰੀ ਅਕਾਲ, ਕਿਸੇ ਨੂੰ ਸੱਟ ਨਹੀਂ, ਨੈਸ਼ਨਲ ਹਾਈਵੇ 'ਤੇ ਰੇਡੀਏਟਰ ਟੁੱਟ ਗਿਆ, ਪਾਲਿਸੀ 7820",
+        "minor_city": "ਲੁਧਿਆਣਾ ਸ਼ਹਿਰ ਵਿੱਚ ਬੈਟਰੀ ਖਰਾਬ ਹੋ ਗਈ, ਸੱਟ ਨਹੀਂ",
+        "confirm": "ਹਾਂਜੀ ਪੱਕਾ ਕਰੋ",
+        "injury": "ਹਾਦਸਾ ਹੋ ਗਿਆ, ਖ਼ੂਨ ਵਗ ਰਿਹਾ ਸੱਟ ਲੱਗੀ",
+    },
+    "en-IN": {
+        "safe_nh": "We are safe, nobody is injured, radiator is damaged on the highway, policy 7820",
+        "minor_city": "My car battery is dead in the city, no one is injured",
+        "confirm": "Yes please confirm",
+        "injury": "Severe bleeding and head injury in crash",
+    },
+}
+
+
+def _assert_reply_matches_language(lang: str, text: str) -> None:
+    import re
+    from backend.i18n import SCRIPT_REGEX_BY_LANG
+
+    assert text.strip()
+    if lang == "hi-IN":
+        assert not re.search(r"[\u0901-\u0963\u0966-\u0D7F]", text)
+    elif lang == "en-IN":
+        assert not re.search(r"[\u0901-\u0963\u0966-\u0D7F]", text)
+        assert not re.search(r"\b(?:aap|hai|hain|nahi|kya|bhej|gaadi|chot)\b", text, re.I)
+    elif lang == "mr-IN":
+        assert re.search(r"[\u0901-\u0963\u0966-\u097F]", text)
+        assert not re.search(r"[\u0980-\u0D7F]", text)
+        assert not re.findall(r"\b(?!(?:NH|EV|OK|FNOL|RSA)\b)[A-Za-z]{3,}\b", text)
+    else:
+        assert SCRIPT_REGEX_BY_LANG[lang].search(text), f"Missing {lang} script in: {text}"
+        assert not re.search(r"[\u0901-\u0963\u0966-\u097F]", text)
+        assert not re.findall(r"\b(?!(?:NH|EV|OK|FNOL)\b)[A-Za-z]{3,}\b", text)
+
+
+@pytest.mark.parametrize("lang", sorted(_ALL_10_SAMPLES.keys()))
+def test_all_10_gnani_languages_rules_detection_and_brain_workflows(lang: str):
+    from backend.translit import detect_script_language
+
+    samples = _ALL_10_SAMPLES[lang]
+    if lang != "hi-IN":
+        assert detect_script_language(samples["safe_nh"]) == lang
+    else:
+        assert detect_script_language(samples["safe_nh"]) is None
+
+    assert triage_injury_and_safety(samples["safe_nh"], language=lang)["injured"] is False
+    assert triage_injury_and_safety(samples["injury"], language=lang)["injured"] is True
+    assert extract_parts(samples["safe_nh"]) == ["radiator"]
+    assert extract_road_type(samples["safe_nh"]) == "NH"
+    assert extract_road_type(samples["minor_city"]) == "CITY"
+    assert confirm_detection(samples["confirm"]) == "confirm"
+
+    async def _run():
+        b = Brain(persist_history=False)
+
+        # Workflow B -> Confirm -> Done
+        await b.start_call(f"b-{lang}", language=lang)
+        r1 = await b.process_turn(f"b-{lang}", samples["safe_nh"])
+        assert r1["language"] == lang
+        assert r1["entities"]["policy_number"] == "7820"
+        assert r1["entities"]["road_type"] == "NH"
+        assert r1["entities"]["parts"] == ["radiator"]
+        assert r1["stage"] == "confirm"
+        _assert_reply_matches_language(lang, r1["reply_text"])
+        assert all(c["language"] == lang for c in r1["clauses"])
+
+        r2 = await b.process_turn(f"b-{lang}", samples["confirm"])
+        assert r2["language"] == lang
+        assert r2["stage"] == "done"
+        _assert_reply_matches_language(lang, r2["reply_text"])
+
+        # Workflow A (minor breakdown in city -> NCB protected, skip policy)
+        await b.start_call(f"a-{lang}")
+        ra = await b.process_turn(f"a-{lang}", samples["minor_city"])
+        assert ra["language"] == lang
+        assert ra["stage"] == "done"
+        assert ra["entities"]["last_dispatch"]["workflow"] == "A"
+        _assert_reply_matches_language(lang, ra["reply_text"])
+
+        # Emergency 112
+        await b.start_call(f"e-{lang}")
+        re_ = await b.process_turn(f"e-{lang}", samples["injury"])
+        assert re_["language"] == lang
+        assert re_["stage"] == "emergency_handoff"
+        _assert_reply_matches_language(lang, re_["reply_text"])
+
+        # LLM safety validator permits matching reply and blocks wrong-script drift
+        mem = b.get_or_create_call(f"b-{lang}")
+        assert b._llm_reply_is_safe(r1["reply_text"], mem, {"injured": False}) is True
+        if lang != "en-IN":
+            assert b._llm_reply_is_safe("Sorry, please provide your policy number.", mem, {"injured": False}) is False
+        else:
+            assert b._llm_reply_is_safe("Shukar hai aap safe hain, radiator toot gaya.", mem, {"injured": False}) is False
+
+    asyncio.run(_run())
+
+
+def test_all_10_gnani_languages_config_stt_tts_voices_and_frontend_options(monkeypatch):
+    from backend.i18n import ALL_GNANI_LANGUAGES, LANG_META
+
+    assert len(ALL_GNANI_LANGUAGES) == 10
+    gnani_client.set_api_key("dummy-10lang-key")
+    captured: Dict[str, Any] = {}
+
+    class _MockResp:
+        def __init__(self, payload: Dict[str, Any]):
+            self.status_code = 200
+            self.headers = {"content-type": "application/json"}
+            self.content = b""
+            self._payload = payload
+            self.text = json.dumps(payload)
+
+        def json(self):
+            return self._payload
+
+    class _MockClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def post(self, url, headers=None, files=None, data=None, json=None):
+            if "/stt/v3" in url:
+                captured["stt_data"] = dict(data or {})
+                return _MockResp({
+                    "transcript": "రేడియేటర్ పాడైపోయింది",
+                    "detected_language_code": "te-IN",
+                    "request_id": "te-auto-req",
+                })
+            captured["tts_json"] = dict(json or {})
+            wav = gnani_client.fallback_tts_wav("ok")
+            return _MockResp({"audio": base64.b64encode(wav).decode("ascii")})
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(httpx, "AsyncClient", _MockClient)
+
+    async def _check():
+        # indic-auto honors server detected_language_code across all 10 Gnani languages
+        stt = await gnani_client.transcribe_wav(gnani_client.fallback_tts_wav("te"), language_code="indic-auto")
+        assert stt["detected_language_code"] == "te-IN"
+        assert stt["language"] == "te-IN"
+
+        # Every Gnani language sends its native Timbre v2.5 voice + language tag
+        for code, meta in LANG_META.items():
+            tts = await gnani_client.synthesize_speech("Test", language=code, use_cache=False)
+            assert captured["tts_json"]["language"] == code
+            assert captured["tts_json"]["voice"] == meta["tts_voice"]
+            assert tts["language"] == code
+
+    asyncio.run(_check())
+
+    # HTTP /api/config + frontend HTML/JS advertise all 10 Gnani languages
+    gnani_client.set_api_key("")
+    orig_persist = BRAIN.persist_history
+    BRAIN.persist_history = False
+    try:
+        with TestClient(app) as client:
+            cfg = client.get("/api/config").json()
+            assert set(cfg["supported_languages"]) == set(ALL_GNANI_LANGUAGES)
+            idx_html = client.get("/").text
+            app_js = client.get("/app.js").text
+            for code in ALL_GNANI_LANGUAGES:
+                assert f'value="{code}"' in idx_html
+                assert f'"{code}"' in app_js
+            assert 'value="indic-auto"' in idx_html
+
+            # Explicit English call via HTTP
+            st_en = client.post("/api/call/start", json={"call_id": "en-http-01", "language": "en-IN"}).json()
+            assert st_en["language"] == "en-IN"
+            _assert_reply_matches_language("en-IN", st_en["greeting"])
+
+            # Malayalam auto-detect on default call
+            st_ml = client.post("/api/call/start", json={"call_id": "ml-http-01"}).json()
+            assert st_ml["language"] == "hi-IN"
+            t_ml = client.post(
+                "/api/call/turn",
+                json={"call_id": "ml-http-01", "transcript_override": _ALL_10_SAMPLES["ml-IN"]["safe_nh"]},
+            ).json()
+            assert t_ml["language"] == "ml-IN"
+            assert t_ml["entities"]["policy_number"] == "7820"
+            _assert_reply_matches_language("ml-IN", t_ml["reply_text"])
+    finally:
+        BRAIN.persist_history = orig_persist
+
 
 

@@ -21,6 +21,14 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from backend.i18n import (
+    STRINGS,
+    compose_localized_reply,
+    format_range,
+    localize_garage,
+    normalize_lang_code,
+    spoken_part_localized,
+)
 from backend.translit import normalize_for_matching
 
 _DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "synthetic_db.json")
@@ -432,6 +440,15 @@ def detect_drivability(parts: List[str], transcript: str = "") -> Tuple[bool, st
         "engine start mat",
         "drivable nahi",
         "not drivable",
+        "cannot drive",
+        "can't drive",
+        "cant drive",
+        "unable to drive",
+        "won't move",
+        "wont move",
+        "not movable",
+        "won't start",
+        "wont start",
         "tyre toot",
         "tyre phat",
         "wheel toot",
@@ -456,12 +473,14 @@ def detect_drivability(parts: List[str], transcript: str = "") -> Tuple[bool, st
 
 
 _CONFIRM_RE = re.compile(
-    r"\b(?:confirm kar do|confirm karde|haan confirm|haan ji|haan|yes|theek hai|thik hai|"
+    r"\b(?:confirm kar do|confirm karde|haan confirm|haan ji|haan|yes please|yes confirm|yes go ahead|"
+    r"go ahead|please confirm|sounds good|yes|theek hai|thik hai|"
     r"ok|okay|kardo|kar do|confirm)\b",
     re.IGNORECASE,
 )
 _CORRECT_RE = re.compile(
-    r"\b(?:ruko|ruk ja|rukja|galat|wrong|arre nahi|nahi nahi|hold on|pause|change|badal)\b",
+    r"\b(?:ruko|ruk ja|rukja|galat|wrong|incorrect|mistake|actually no|not that|"
+    r"arre nahi|nahi nahi|hold on|pause|change|badal)\b",
     re.IGNORECASE,
 )
 
@@ -488,7 +507,9 @@ def confirm_detection(transcript: str, prior_policy: Optional[str] = None) -> st
 # ===========================================================================
 
 _SAFE = re.compile(
-    r"\b(?:safe|सुरक्षित|सब ठीक|सब सुरक्षित|theek hai|thik hai|सब ठीक है|"
+    r"\b(?:safe|everyone is safe|we are safe|nobody is injured|no one is injured|nobody got hurt|"
+    r"no injuries|no injury|all safe|uninjured|unhurt|"
+    r"सुरक्षित|सब ठीक|सब सुरक्षित|theek hai|thik hai|सब ठीक है|"
     r"koi chot nahi|koi takleef nahi|chot nahi lagi|chot nahi hui|chot na lagi|"
     r"sab thik|sab safe|sab surakshit|khatre mein nahi|"
     r"பாதுகாப்பு|பாதுகாப்பாக|பத்திரம்|நல்லா இருக்கோம்|காயமில்லை|அடிபடல)\b",
@@ -498,7 +519,7 @@ _SAFE = re.compile(
 _NEGATION_WORDS = (
     "नहीं", "नही", "नहि", "नाहि", "बिना", "बगैर", "ना", "मत",
     "कोई चोट नहीं", "कोई तकलीफ नहीं",
-    "no", "not", "don't", "do not", "without", "uninjured", "unhurt",
+    "no", "not", "none", "nobody", "no one", "neither", "don't", "do not", "without", "uninjured", "unhurt",
     "जरूरत नहीं", "zarurat nahi", "zarurat nahin",
     "necessity nahi", "nahi hai", "nahi ho", "nahi hui", "nahi lagi",
     "nahi", "nahin", "nahiin", "naa", "na", "naahi", "binaa", "bina", "bagair", "mat", "koni",
@@ -506,9 +527,9 @@ _NEGATION_WORDS = (
 
 # Word-bounded negation regex so "no" never hits "minor"/"unknown" and "na" never hits "kitna"
 _NEGATION_RE = re.compile(
-    r"(?:(?<![a-z\u0900-\u097f])(?:"
+    r"(?:(?<![a-z\u0900-\u0d7f])(?:"
     + "|".join(re.escape(w) for w in sorted(_NEGATION_WORDS, key=len, reverse=True))
-    + r")(?![a-z\u0900-\u097f]))",
+    + r")(?![a-z\u0900-\u0d7f]))",
     re.IGNORECASE,
 )
 
@@ -537,12 +558,13 @@ def _injury_keyword_negated(t: str, keyword: str) -> bool:
     return all(_injury_keyword_negated_at(t, m.start(), m.end()) for m in hits)
 
 
-def triage_injury_and_safety(transcript: str) -> Dict[str, Any]:
+def triage_injury_and_safety(transcript: str, language: str = "hi-IN") -> Dict[str, Any]:
     """Detect injury signal. If injured: HALT claim form-filling, raise
     112 ambulance + 1033 NHAI patrol + live human officer handoff.
     """
     t = normalize_for_matching(transcript or "").lower()
     inj_kw = list(dict.fromkeys(EMERGENCY["injury_keywords_en"] + EMERGENCY["injury_keywords_hi"]))
+    lang = normalize_lang_code(language) or "hi-IN"
 
     hits: List[Tuple[str, int, int]] = []
     for k in inj_kw:
@@ -566,6 +588,7 @@ def triage_injury_and_safety(transcript: str) -> Dict[str, Any]:
         "safety_status": "EMERGENCY — 112 AMBULANCE & POLICE DISPATCHED" if injured else "SAFE — No injury reported",
     }
     if injured:
+        empathy_local = STRINGS.get(lang, STRINGS["hi-IN"])["inj_empathy"]
         out.update(
             {
                 "emergency_calls": [
@@ -575,25 +598,20 @@ def triage_injury_and_safety(transcript: str) -> Dict[str, Any]:
                     {"line": "LIVE-AGENT", "label": "☎️ Human Emergency Officer Handoff (priority queue)"},
                 ],
                 "halt_claim_intake": True,
-                "spoken_empathy_hi": (
-                    "Aapki jaan hamare liye sabse important hai. Main turant 112 ambulance "
-                    "aur 1033 highway patrol bhej rahi hoon. Kripya phone band mat kijiye — "
-                    "ek officer aapko directly connect kar rahi hoon."
-                ),
-                "spoken_empathy_ta": (
-                    "உங்கள் உயிர் தான் எங்களுக்கு மிக முக்கியம். உடனடியாக 112 ஆம்புலன்ஸ் "
-                    "மற்றும் 1033 நெடுஞ்சாலை ரோந்துப் படையை அனுப்புகிறேன். தயவுசெய்து அழைப்பைத் "
-                    "துண்டிக்காதீர்கள் — அவசர உதவி அதிகாரியுடன் நேரடியாக இணைக்கிறேன்."
-                ),
+                "spoken_empathy": empathy_local,
+                "spoken_empathy_hi": STRINGS["hi-IN"]["inj_empathy"],
+                "spoken_empathy_ta": STRINGS["ta-IN"]["inj_empathy"],
                 "claim_intake_paused_reason": "Human safety > claim forms. FNOL resumed only after medical handoff.",
             }
         )
     else:
+        safe_local = STRINGS.get(lang, STRINGS["hi-IN"])["safe_empathy"]
         out.update({
             "emergency_calls": [],
             "halt_claim_intake": False,
-            "spoken_empathy_hi": "Shukar hai ki aap safe hain.",
-            "spoken_empathy_ta": "நல்லவேளை, நீங்கள் பாதுகாப்பாக இருக்கிறீர்கள்.",
+            "spoken_empathy": safe_local,
+            "spoken_empathy_hi": STRINGS["hi-IN"]["safe_empathy"],
+            "spoken_empathy_ta": STRINGS["ta-IN"]["safe_empathy"],
         })
     return out
 
@@ -879,104 +897,41 @@ _GARAGE_NAMES_TA: Dict[str, str] = {
 
 
 def _garage_name_for_lang(garage: Optional[Dict[str, Any]], language: str = "hi-IN") -> str:
-    if not garage:
-        return "அங்கீகரிக்கப்பட்ட பழுதுபார்க்கும் மையம்" if language == "ta-IN" else "network garage"
-    if language == "ta-IN":
-        gid = garage.get("id", "")
-        if gid in _GARAGE_NAMES_TA:
-            return _GARAGE_NAMES_TA[gid]
-        return "அங்கீகரிக்கப்பட்ட பழுதுபார்க்கும் மையம்"
-    return garage.get("name", "network garage")
+    lang = normalize_lang_code(language) or "hi-IN"
+    return localize_garage(garage, lang)
 
 
 def spoken_part(parts: List[str], language: str = "hi-IN") -> str:
     """Human-friendly name of the highest-priority part (non-drivable first)."""
     if not parts:
         return ""
-    priority = {"non_drivable": 0, "drivable_minor": 1, "minor_breakdown": 2}
-    ordered = sorted(
-        parts,
-        key=lambda p: priority.get(PARTS.get(p, {}).get("safety", "minor_breakdown"), 3),
-    )
-    first = ordered[0]
-    if language == "ta-IN":
-        return SPOKEN_PART_TA.get(first, "வாகன பழுது")
-    return SPOKEN_PART.get(first, PARTS.get(first, {}).get("display_en", first).split(" / ")[0].lower())
+    lang = normalize_lang_code(language) or "hi-IN"
+    if lang == "hi-IN":
+        priority = {"non_drivable": 0, "drivable_minor": 1, "minor_breakdown": 2}
+        ordered = sorted(
+            parts,
+            key=lambda p: priority.get(PARTS.get(p, {}).get("safety", "minor_breakdown"), 3),
+        )
+        first = ordered[0]
+        return SPOKEN_PART.get(first, PARTS.get(first, {}).get("display_en", first).split(" / ")[0].lower())
+    return spoken_part_localized(parts, PARTS, lang)
 
 
 def compose_agent_reply(incident: Dict[str, Any], ack: str = "",
                         ask_confirm: bool = True, language: str = "hi-IN") -> str:
-    """Turn structured tool outputs into ONE 2-clause-ready spoken reply."""
+    """Turn structured tool outputs into ONE 2-clause-ready spoken reply in any Gnani language."""
+    lang = normalize_lang_code(language) or "hi-IN"
+    if lang != "hi-IN":
+        localized = compose_localized_reply(
+            lang, incident, PARTS, IRDAI["rural_towing_reimbursement_inr"],
+            ack=ack, ask_confirm=ask_confirm,
+        )
+        if localized:
+            return localized
+
     tri = incident.get("triage", {})
     disp = incident.get("dispatch", {})
     draft = incident.get("claim_draft", {})
-
-    if language == "ta-IN":
-        if tri.get("injured"):
-            return tri.get("spoken_empathy_ta") or tri["spoken_empathy_hi"]
-
-        policy_no = disp.get("policy_number") or (draft.get("policy_number") if draft else "")
-        policy_ref = f"பாலிசி எண் {policy_no} கீழ் " if policy_no else "உங்கள் சாலை உதவி பாலிசி கீழ் "
-        part_word = spoken_part(disp.get("parts", []) or [], language="ta-IN") or "வாகன பழுது"
-        veh_cls = disp.get("vehicle_class", "four_wheeler")
-        mech_word = "இருசக்கர வாகன பணியாளர்" if veh_cls == "two_wheeler" else "சாலை உதவி பணியாளர்"
-
-        if disp.get("workflow") == "A":
-            opener = ack.strip() or "நல்லவேளை, நீங்கள் பாதுகாப்பாக இருக்கிறீர்கள்!"
-            clause1 = (
-                f"{opener} {part_word} என்பது சிறிய பிரச்சினைதான் — "
-                "கவலைப்படாதீர்கள், வண்டி பாதுகாப்பாக உள்ளது."
-            )
-            clause2 = (
-                f"நான் {disp.get('eta_mins', 22)} நிமிடங்களில் நேரடியாக {mech_word} அனுப்புகிறேன், "
-                "இந்த சாலை உதவி சேவை முற்றிலும் இலவசம், மேலும் காப்பீட்டு கோரிக்கை போடாததால் உங்கள் "
-                "20 சதவீத போனஸ் சலுகை பாதுகாப்பாக இருக்கும்"
-            )
-            if disp.get("nhai_patrol_alerted"):
-                clause2 += ", மேலும் பாதுகாப்பிற்காக 1033 நெடுஞ்சாலை ரோந்துப் படைக்கும் தகவல் தெரிவிக்கப்பட்டுள்ளது"
-            clause2 += (". உதவியை உறுதி செய்யவா?" if ask_confirm
-                        else " — உதவி அனுப்பப்பட்டுவிட்டது.")
-        elif disp.get("workflow") == "B" and (disp.get("rural_reimbursement") or {}).get("eligible"):
-            clause1 = (
-                f"{ack.strip() or 'நல்லவேளை, நீங்கள் பாதுகாப்பாக இருக்கிறீர்கள்!'} "
-                f"{part_word} சேதமடைந்துள்ளதால் தயவுசெய்து வண்டியை ஸ்டார்ட் செய்யாதீர்கள்."
-            )
-            clause2 = (
-                f"{policy_ref}அருகிலுள்ள பழுதுபார்க்கும் மையம் 2 மணி நேரத்திற்கு மேல் தொலைவில் உள்ளது — "
-                f"எனவே காப்பீட்டு ஒழுங்குமுறை விதிப்படி உள்ளூர் இழுவை வாகனத்திற்காக ₹{IRDAI['rural_towing_reimbursement_inr']} "
-                "திருப்பித் தர அனுமதி அளிக்கிறேன் — அதாவது உள்ளூர் கிரேன் ஏற்பாடும் செய்துகொள்ளலாம்."
-                + (" உறுதி செய்யட்டுமா?" if ask_confirm else "")
-            )
-        elif disp.get("workflow") == "B":
-            gname = _garage_name_for_lang(disp.get("destination_garage"), language="ta-IN")
-            est_ta = (draft.get("estimated_range_display_ta") or "") if draft else ""
-            clause1 = (
-                f"{ack.strip() or 'நல்லவேளை, நீங்கள் பாதுகாப்பாக இருக்கிறீர்கள்!'} "
-                f"{part_word} சேதமடைந்துள்ளதால் தயவுசெய்து வண்டியை ஸ்டார்ட் செய்யாதீர்கள்."
-            )
-            clause2 = (
-                f"{policy_ref}{gname} வழியாக இலவச இழுவை வாகனம் அனுப்புகிறோம்"
-                + (", மேலும் 1033 நெடுஞ்சாலை ரோந்துப் படையும் பாதுகாப்பு கூம்புகள் அமைக்கிறது" if disp.get("nhai_patrol_alerted") else "")
-                + (f", மற்றும் {est_ta} மதிப்பீட்டு கோரிக்கை நகல் தயாராக உள்ளது" if est_ta else "")
-                + (". உறுதி செய்யவா?" if ask_confirm else ".")
-            )
-        elif disp.get("workflow") == "C":
-            gname = _garage_name_for_lang(disp.get("destination_garage"), language="ta-IN")
-            est_ta = (draft.get("estimated_range_display_ta") or "") if draft else ""
-            clause1 = (
-                f"{ack.strip() or 'நல்லவேளை, நீங்கள் பாதுகாப்பாக இருக்கிறீர்கள்!'} "
-                "வண்டி ஓட்டக்கூடிய நிலையில் உள்ளது, வெளிப்புற சேதம் மட்டுமே தெரிகிறது."
-            )
-            clause2 = (
-                f"தயவுசெய்து எண் பலகை தெரியும்படி 4 புகைப்படங்கள் எடுத்து நேரடியாக {gname} செல்லுங்கள்"
-                + (f" — {est_ta} மதிப்பீட்டு கோரிக்கை நகல் தயாராக உள்ளது" if est_ta else "")
-                + (". பதிவை உறுதி செய்யவா?" if ask_confirm else ".")
-            )
-        else:
-            clause1 = ack.strip() or "புரிந்ததுங்க."
-            clause2 = "எனக்கு இன்னும் சிறிது விவரம் தேவை — வண்டியில் என்ன ஆனது, நீங்கள் இப்போது எங்கே இருக்கிறீர்கள்?"
-
-        return f"{clause1} {clause2}".strip()
 
     if tri.get("injured"):
         return tri["spoken_empathy_hi"]

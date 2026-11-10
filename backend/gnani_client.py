@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import json
 import os
 import random
 import struct
@@ -34,6 +35,9 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import httpx
+
+from backend.i18n import ALL_GNANI_LANGUAGES, normalize_lang_code, tts_voice_for_lang
+from backend.translit import detect_script_language
 
 try:
     from dotenv import load_dotenv
@@ -65,8 +69,9 @@ DEFAULT_KEYTERMS = (
     "Splendor,Swift,Activa,Bolero,NH-44,Karnal,"
     "radiator,bumper,headlight,axle,puncture,cashless,policy"
 )
-STT_FORMATS = {"codemix", "transcribe"}
-STT_LANGS = {"hi-IN", "indic-auto", "en-IN", "mr-IN", "ta-IN", "te-IN"}
+STT_FORMATS = {"verbatim", "transcribe", "codemix", "transliterate"}
+STT_LANGS = set(ALL_GNANI_LANGUAGES) | {"indic-auto"}
+TTS_LANGS = set(ALL_GNANI_LANGUAGES) | {"auto"}
 RETRYABLE_STATUS = {408, 429, 500, 502, 503, 504}
 
 _LOOP_SEMS: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore]" = weakref.WeakKeyDictionary()
@@ -97,6 +102,7 @@ def _load_config() -> GnaniConfig:
     stt_lang = os.environ.get("GNANI_STT_LANGUAGE", DEFAULT_LANGUAGE)
     stt_format = os.environ.get("GNANI_STT_FORMAT", "codemix")
     tts_model = os.environ.get("GNANI_TTS_MODEL", DEFAULT_TTS_MODEL)
+    tts_lang = os.environ.get("GNANI_TTS_LANGUAGE", DEFAULT_LANGUAGE)
     return GnaniConfig(
         api_key=key,
         base_url=os.environ.get("GNANI_BASE_URL", DEFAULT_BASE_URL).rstrip("/"),
@@ -105,7 +111,7 @@ def _load_config() -> GnaniConfig:
         stt_format=stt_format if stt_format in STT_FORMATS else "codemix",
         tts_model=tts_model if tts_model in ALLOWED_TTS_MODELS else DEFAULT_TTS_MODEL,
         tts_voice=os.environ.get("GNANI_TTS_VOICE", DEFAULT_VOICE),
-        tts_language=os.environ.get("GNANI_TTS_LANGUAGE", DEFAULT_LANGUAGE),
+        tts_language=tts_lang if tts_lang in TTS_LANGS else DEFAULT_LANGUAGE,
     )
 
 
@@ -284,13 +290,19 @@ async def transcribe_wav(
     language_candidates: Optional[str] = None,
     keyterms: str = DEFAULT_KEYTERMS,
 ) -> Dict[str, Any]:
-    """POST /stt/v3 — 16kHz mono 16-bit PCM WAV -> transcript (hi-IN / ta-IN / indic-auto)."""
-    lang = language_code or CONFIG.stt_language
+    """POST /stt/v3 — 16kHz mono 16-bit PCM WAV -> transcript across all 10 Gnani languages + indic-auto."""
+    raw_lang = language_code or CONFIG.stt_language
+    if raw_lang in STT_LANGS:
+        lang = raw_lang
+    else:
+        lang = normalize_lang_code(raw_lang) or ("indic-auto" if "auto" in str(raw_lang).lower() else DEFAULT_LANGUAGE)
     m = model or CONFIG.stt_model
     fmt = audio_format or CONFIG.stt_format
-    if lang == "indic-auto" and m != "prisma-v3.0":
+    # Gnani prisma-v3.0 is required for indic-auto, codemix/transliterate, and all 8 regional languages
+    if lang == "indic-auto" or lang not in ("hi-IN", "en-IN") or fmt in ("codemix", "transliterate"):
         m = "prisma-v3.0"
-    pref = preferred_language or ("hi-IN" if lang == "indic-auto" else lang)
+    if m == "prisma-v3.0" and audio_format is None and lang != "hi-IN":
+        fmt = "transcribe"
     started = time.perf_counter()
 
     if not live_mode():
@@ -305,15 +317,28 @@ async def transcribe_wav(
         }
 
     url = f"{CONFIG.base_url}/stt/v3"
-    data = {
+    data: Dict[str, Any] = {
         "model": m,
         "language_code": lang,
         "format": fmt,
-        "preferred_language": pref,
-        "keyterms": keyterms,
     }
-    if lang == "indic-auto":
-        data["language_candidates"] = language_candidates or "hi-IN,ta-IN,en-IN"
+    if lang == "indic-auto" and language_candidates:
+        cands_raw = [c.strip() for c in str(language_candidates).split(",") if c.strip()]
+        cands: list[str] = []
+        for c in cands_raw:
+            nc = normalize_lang_code(c) or (c if c in ALL_GNANI_LANGUAGES else None)
+            if nc and nc not in cands:
+                cands.append(nc)
+        if 2 <= len(cands) <= 4:
+            data["multi_lang_codes"] = ",".join(cands)
+    if keyterms:
+        if m == "prisma-v3.0":
+            kw_list = [w.strip() for w in keyterms.split(",") if w.strip()][:200]
+            if kw_list:
+                data["keywords"] = json.dumps(kw_list, ensure_ascii=False)
+        else:
+            data["keyterms"] = keyterms
+    _ = preferred_language  # kept in signature for backwards compatibility
     headers = {"X-API-Key-ID": CONFIG.api_key}
 
     last_err: str = ""
@@ -344,20 +369,29 @@ async def transcribe_wav(
                 payload.get("transcript") or payload.get("display")
                 or payload.get("text") or payload.get("Transcript")
                 or nested.get("transcript") or nested.get("text") or ""
-            )
-            detected_lang = (
-                payload.get("language")
+            ).strip()
+            detected_raw = (
+                payload.get("detected_language_code")
+                or payload.get("language")
                 or payload.get("detected_language")
+                or nested.get("detected_language_code")
                 or nested.get("language")
                 or nested.get("detected_language")
             )
+            resolved_lang = (
+                normalize_lang_code(str(detected_raw or ""))
+                or detect_script_language(transcript)
+                or (lang if lang != "indic-auto" else None)
+                or DEFAULT_LANGUAGE
+            )
             return {
-                "transcript": transcript.strip(),
+                "transcript": transcript,
                 "request_id": str(payload.get("request_id") or payload.get("id") or nested.get("request_id") or ""),
                 "stt_latency_ms": latency,
                 "model": m,
                 "language_code": lang,
-                "language": str(detected_lang or lang),
+                "detected_language_code": detected_raw,
+                "language": str(resolved_lang),
                 "format": fmt,
                 "fallback": False,
                 "score": payload.get("Confidence") or payload.get("confidence"),
@@ -393,7 +427,7 @@ def _json_or_bow(resp: httpx.Response) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# TTS — Gnani Timbre v2.5 / v3.0 (voice "Nalini") + cache
+# TTS — Gnani Timbre v2.5 / v3.0 (native voice per language) + cache
 # ---------------------------------------------------------------------------
 
 async def synthesize_speech(
@@ -408,9 +442,9 @@ async def synthesize_speech(
 ) -> Dict[str, Any]:
     """POST /api/v1/tts/inference -> RIFF/WAV bytes + latency telemetry."""
     started = time.perf_counter()
-    v = voice or CONFIG.tts_voice
     mdl = model or CONFIG.tts_model
-    lang = language or CONFIG.tts_language
+    lang = "auto" if language == "auto" else (normalize_lang_code(language) or CONFIG.tts_language)
+    v = voice or (tts_voice_for_lang(lang, mdl) if CONFIG.tts_voice == DEFAULT_VOICE else CONFIG.tts_voice)
     ck = cache_key(text, v, mdl, lang)
 
     if use_cache and live_mode():
