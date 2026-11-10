@@ -36,6 +36,7 @@ from pydantic import BaseModel, Field
 load_dotenv()
 
 from backend import eval_runner
+from backend.i18n import ALL_GNANI_LANGUAGES, LANG_META, get_lang_bundle, normalize_lang_code
 from backend.gnani_client import (
     CONFIG,
     fallback_tts_wav,
@@ -95,9 +96,11 @@ def _sync_global_stage(stage_key: str, ms: float, sess: Optional[SessionPipeline
 def _resolve_stt_lang(explicit: Optional[str], sess: Optional[SessionPipeline]) -> Optional[str]:
     val = (explicit or (sess.stt_language if sess else "") or "").strip()
     if val:
-        return val
-    if sess and sess.language == "ta-IN":
-        return "ta-IN"
+        if val.lower() in ("indic-auto", "auto"):
+            return "indic-auto"
+        return normalize_lang_code(val) or val
+    if sess and sess.language in ALL_GNANI_LANGUAGES:
+        return sess.language
     return None
 
 
@@ -108,9 +111,9 @@ async def _synthesize_one_clause(
 ) -> Dict[str, Any]:
     t0 = time.perf_counter()
     lang = (
-        language
-        or c.get("language")
-        or ("ta-IN" if detect_script_language(c.get("text", "")) == "ta-IN" else None)
+        normalize_lang_code(language)
+        or normalize_lang_code(c.get("language"))
+        or detect_script_language(c.get("text", ""))
     )
     synth = await synthesize_speech(c["text"], language=lang, use_cache=True)
     dt = (time.perf_counter() - t0) * 1000.0
@@ -252,6 +255,8 @@ async def config() -> Dict[str, Any]:
         "llm_enabled": bool(os.environ.get("LLM_API_KEY")),
         "semaphore_limit": 1,
         "max_concurrent_sessions": REGISTRY.max_sessions,
+        "supported_languages": list(ALL_GNANI_LANGUAGES),
+        "language_meta": LANG_META,
     }
 
 
@@ -527,13 +532,13 @@ async def _empty_turn(
     """STT returned no words — never stay silent: speak a 2-clause retry prompt."""
     sm.transition("THINKING")
     mem = BRAIN.get_or_create_call(call_id)
-    lang_hint = (language or sess.language or mem.entities.get("language") or "hi-IN").lower()
-    lang = "ta-IN" if lang_hint.startswith("ta") else "hi-IN"
-    reply = (
-        "உங்கள் குரல் தெளிவாகக் கேட்கவில்லை. மைக் சரிபார்த்து மீண்டும் சொல்லுங்கள் — நான் கேட்டுக்கொண்டிருக்கிறேன்."
-        if lang == "ta-IN"
-        else "Aapki awaaz mujhe saaf nahi aayi ji. Mic check kijiye aur apni baat dobara boliye — main sun rahi hoon."
+    lang = (
+        normalize_lang_code(language)
+        or normalize_lang_code(sess.language)
+        or normalize_lang_code(mem.entities.get("language"))
+        or "hi-IN"
     )
+    reply = get_lang_bundle(lang)["empty_turn"]
     sess.active_agent_reply = reply
     t5 = time.perf_counter()
     batch = split_into_clauses(reply, call_id + "-empty", language=lang)
@@ -1046,10 +1051,7 @@ async def call_end(payload: EndIn) -> Dict[str, Any]:
 
 @app.post("/api/tts")
 async def tts(payload: TtsIn) -> Dict[str, Any]:
-    lang = (
-        payload.language.strip()
-        or ("ta-IN" if detect_script_language(payload.text) == "ta-IN" else None)
-    )
+    lang = normalize_lang_code(payload.language) or detect_script_language(payload.text)
     synth = await synthesize_speech(payload.text, language=lang, use_cache=payload.use_cache)
     wav = synth["audio"] if is_valid_wav(synth.get("audio", b"")) else fallback_tts_wav(payload.text)
     return {

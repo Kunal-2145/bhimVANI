@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>BimaVani — 24×7 Hinglish Voice RSA & IRDAI Claim Desk</title>
-<link rel="stylesheet" href="/style.css?v=20261110t">
+<title>BimaVani — 24×7 Multilingual Voice RSA & IRDAI Claim Desk</title>
+<link rel="stylesheet" href="/style.css?v=20261110all">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛣️</text></svg>">
 </head>
 <body>
@@ -17,7 +17,7 @@
     <span class="brand-sub">1-800-BIMA-VANI</span>
   </a>
   <div class="topbar-right">
-    <span class="kicker">HINGLISH RSA + IRDAI CLAIM DESK</span>
+    <span class="kicker">ALL-INDIA 10-LANGUAGE RSA + IRDAI DESK</span>
     <button id="btn-open-key" class="chip-btn" type="button" title="Configure & test Gnani API Key">🔑 Gnani API</button>
     <button id="btn-open-eval" class="chip-btn" type="button" title="Run 20-Case Evaluation Benchmark">📊 Benchmark</button>
     <button id="mode-pill" class="chip-status chip-clickable" type="button" title="Current voice engine mode">…</button>
@@ -34,16 +34,19 @@
 
     <h1 id="hero-line">Tap call.<br>Then just talk.</h1>
     <p class="hero-sub" id="hero-sub">
-      BimaVani answers in Hinglish, listens while you speak, dispatches RSA workflows, and auto-drafts IRDAI claims the moment you pause.
+      BimaVani speaks all 10 Gnani languages (Hindi/Hinglish, Tamil, Telugu, Kannada, Malayalam, Bengali, Marathi, Gujarati, Punjabi &amp; English), dispatches RSA workflows, and auto-drafts IRDAI claims the moment you pause.
     </p>
 
     <!-- One-click demo scenarios (works even with mic blocked or in Credit-Shield mode) -->
-    <div class="demo-bar" aria-label="Quick Hinglish test scenarios">
+    <div class="demo-bar" aria-label="Quick multilingual test scenarios">
       <p class="demo-label">TRY A REAL SCENARIO (AUTO-CALLS IF IDLE)</p>
       <div class="demo-chips">
-        <button class="demo-chip" type="button" data-utterance="NH-44 highway par crash ho gaya, radiator phat gaya hai aur bumper mein dent hai, policy number 7820">🚗 NH-44 Crash (#7820)</button>
+        <button class="demo-chip" type="button" data-utterance="NH-44 highway par crash ho gaya, radiator phat gaya hai aur bumper mein dent hai, policy number 7820">🚗 Hinglish NH-44 (#7820)</button>
         <button class="demo-chip" type="button" data-utterance="வணக்கம், எங்களுக்கு காயமில்லை, ஆனா ஹைவேல கார் ரேடியேட்டர் உடைஞ்சிடுச்சு, பாலிசி எண் 7820">🚗 தமிழ் NH-44 (#7820)</button>
+        <button class="demo-chip" type="button" data-utterance="నమస్కారం, మాకు గాయం లేదు, హైవేపై కారు రేడియేటర్ పాడైపోయింది, పాలసీ నంబర్ 7820">🚗 తెలుగు NH-44 (#7820)</button>
+        <button class="demo-chip" type="button" data-utterance="मला जखम नाही, पण महामार्गावर गाडीचा रेडिएटर फुटला आहे, पॉलिसी नंबर 7820">🚗 मराठी NH-44 (#7820)</button>
         <button class="demo-chip" type="button" data-utterance="Delhi mein Activa ki battery dead aur puncture ho gaya hai, policy number 4491">🛵 City NCB Saver (#4491)</button>
+        <button class="demo-chip" type="button" data-utterance="We are safe, no one is injured, battery is dead in the city">🇬🇧 English City Battery</button>
         <button class="demo-chip" type="button" data-utterance="Gaon ki link road par Bolero ka axle twist ho gaya, tow bhejo policy number 9932">🚜 Rural Axle ₹1,500 (#9932)</button>
         <button class="demo-chip" type="button" data-utterance="Accident ho gaya, sar mein chot lagi hai khoon beh raha hai">🚨 Injury 112</button>
         <button class="demo-chip demo-chip--barge" type="button" data-barge="Ruko nahi nahi, mera policy number chaar hazaar chaar sau ikyaanave hai">⚡ Barge-In → #4491</button>
@@ -67,9 +70,17 @@
         <label class="row">
           <span class="row-label">Caller language</span>
           <select id="lang-select">
-            <option value="indic-auto" selected>Auto (Hinglish / தமிழ் / EN)</option>
-            <option value="ta-IN">தமிழ் (Native Tamil · ta-IN)</option>
-            <option value="hi-IN">Hinglish / Hindi (hi-IN)</option>
+            <option value="indic-auto" selected>Auto-Detect (All 10 Gnani Languages)</option>
+            <option value="hi-IN">Hindi / Hinglish (hi-IN)</option>
+            <option value="ta-IN">தமிழ் · Tamil (ta-IN)</option>
+            <option value="te-IN">తెలుగు · Telugu (te-IN)</option>
+            <option value="kn-IN">ಕನ್ನಡ · Kannada (kn-IN)</option>
+            <option value="ml-IN">മലയാളം · Malayalam (ml-IN)</option>
+            <option value="bn-IN">বাংলা · Bengali (bn-IN)</option>
+            <option value="mr-IN">मराठी · Marathi (mr-IN)</option>
+            <option value="gu-IN">ગુજરાતી · Gujarati (gu-IN)</option>
+            <option value="pa-IN">ਪੰਜਾਬੀ · Punjabi (pa-IN)</option>
+            <option value="en-IN">English (India) · en-IN</option>
           </select>
         </label>
         <label class="row">
@@ -87,7 +98,7 @@
         </div>
 
         <div class="type-row">
-          <input id="type-say" placeholder="No mic? Type Hinglish, Hindi or தமிழ்…" autocomplete="off">
+          <input id="type-say" placeholder="Type in Hindi, தமிழ், తెలుగు, ಕನ್ನಡ, മലയാളം, বাংলা, मराठी, ગુજરાતી, ਪੰਜਾਬੀ or English…" autocomplete="off">
           <button id="btn-say" class="btn-quiet" type="button">Send</button>
         </div>
         <p class="micro">Auto-VAD listens to the raw clean mic before any simulated road noise is mixed into the sent WAV.</p>
@@ -394,6 +405,6 @@
   </div>
 </div>
 
-<script src="/app.js?v=20261110t"></script>
+<script src="/app.js?v=20261110all"></script>
 </body>
 </html>

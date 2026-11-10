@@ -82,9 +82,53 @@ const S = {
   detectedLang: "hi-IN",
 };
 
+const LANG_LABELS = {
+  "hi-IN": "Hinglish (hi-IN)",
+  "ta-IN": "தமிழ் (ta-IN)",
+  "te-IN": "తెలుగు (te-IN)",
+  "kn-IN": "ಕನ್ನಡ (kn-IN)",
+  "ml-IN": "മലയാളം (ml-IN)",
+  "bn-IN": "বাংলা (bn-IN)",
+  "mr-IN": "मराठी (mr-IN)",
+  "gu-IN": "ગુજરાતી (gu-IN)",
+  "pa-IN": "ਪੰਜਾਬੀ (pa-IN)",
+  "en-IN": "English (en-IN)",
+};
+
+function explicitSelectedLang() {
+  return (S.languagePref && S.languagePref !== "indic-auto") ? S.languagePref : "";
+}
+
+function normalizeFrontendLang(lang) {
+  const v = (lang || "").trim().toLowerCase();
+  if (!v || v === "auto" || v === "indic-auto") return "";
+  for (const code of Object.keys(LANG_LABELS)) {
+    if (v === code.toLowerCase() || v.startsWith(code.slice(0, 2).toLowerCase() + "-") || v === code.slice(0, 2).toLowerCase()) {
+      return code;
+    }
+  }
+  return "";
+}
+
 function detectTextLanguage(text, hint) {
-  if (/[\u0B80-\u0BFF]/.test(text || "")) return "ta-IN";
-  if ((hint || "").toLowerCase().startsWith("ta")) return "ta-IN";
+  const t = text || "";
+  if (/[\u0B80-\u0BFF]/.test(t)) return "ta-IN";
+  if (/[\u0C00-\u0C7F]/.test(t)) return "te-IN";
+  if (/[\u0C80-\u0CFF]/.test(t)) return "kn-IN";
+  if (/[\u0D00-\u0D7F]/.test(t)) return "ml-IN";
+  if (/[\u0980-\u09FF]/.test(t)) return "bn-IN";
+  if (/[\u0A80-\u0AFF]/.test(t)) return "gu-IN";
+  if (/[\u0A00-\u0A7F]/.test(t)) return "pa-IN";
+  if (/[\u0901-\u0963\u0966-\u097F]/.test(t)) {
+    if (/[ळऱ]|(?:मला|माझी|आहे|नाही|जखम|महामार्ग|थांबा|बदला)/.test(t)) return "mr-IN";
+    return "hi-IN";
+  }
+  const h = normalizeFrontendLang(hint);
+  if (h) return h;
+  if (/\b(?:my car|we are safe|nobody is injured|no one is injured|please send|thank you|shall i confirm|radiator damage)\b/i.test(t)
+      && !/\b(?:hai|hain|nahi|chot|gaadi|aap|kya|ruko|haan)\b/i.test(t)) {
+    return "en-IN";
+  }
   return "hi-IN";
 }
 
@@ -1045,7 +1089,7 @@ function wsConnect(callId) {
           vad_silence_ms: S.vadSilenceMs,
           server_auto_endpoint: false,
           stt_language: S.languagePref,
-          language: S.languagePref === "ta-IN" ? "ta-IN" : "",
+          language: explicitSelectedLang(),
         }));
         clearTimeout(timer);
         done(true);
@@ -1193,7 +1237,7 @@ async function triggerBargeIn(overrideTranscript = "") {
     pcm_b64: pcmSnap,
     source: typed ? "driver_correction" : "driver_button",
     update_cards: !!typed,
-    language: S.languagePref === "ta-IN" ? "ta-IN" : "",
+    language: explicitSelectedLang(),
   };
 
   if (typed) pushTranscript("barge", typed, "⚡ Driver interrupted [interrupted]", true);
@@ -1258,7 +1302,7 @@ async function sendTurn(wavB64, transcriptOverride) {
   VAD.awaiting = true;
   maybeEnableBarge();
   S.turnSentAt = performance.now();
-  const explicitLang = S.languagePref === "ta-IN" ? "ta-IN" : "";
+  const explicitLang = explicitSelectedLang();
   try {
     if (WS.open && WS.sock && WS.sock.readyState === 1) {
       const done = await new Promise((resolve) => {
@@ -1467,7 +1511,7 @@ function resetDeskUi() {
   $("#ent-drivable").textContent = "—";
   $("#ent-stage").textContent = "idle";
   if ($("#ent-lang")) $("#ent-lang").textContent = "—";
-  S.detectedLang = S.languagePref === "ta-IN" ? "ta-IN" : "hi-IN";
+  S.detectedLang = explicitSelectedLang() || "hi-IN";
   $("#rsa-wf-badge").textContent = "—";
   $("#rsa-card").className = "desk-card";
   $("#rsa-body").innerHTML = `<p class="muted">Start a call or click a demo scenario to view live RSA workflow routing (A: NCB Saver · B: Flatbed Tow · C: Cashless Self-Drive).</p>`;
@@ -1512,7 +1556,7 @@ function renderCaseIntelligence(data) {
   const activeLang = data.language || ents.language || detectTextLanguage(data.reply_text || "", "");
   S.detectedLang = activeLang;
   if ($("#ent-lang")) {
-    $("#ent-lang").textContent = activeLang === "ta-IN" ? "தமிழ் (ta-IN)" : "Hinglish (hi-IN)";
+    $("#ent-lang").textContent = LANG_LABELS[activeLang] || activeLang;
   }
   $("#ent-policy").textContent = ents.policy_number ? `#${ents.policy_number}` : "—";
   $("#ent-road").textContent = ents.road_explicit && ents.road_type ? ents.road_type : (ents.road_type ? `${ents.road_type} (inferred)` : "—");
@@ -1792,7 +1836,7 @@ function sendWsConfig() {
         vad_silence_ms: S.vadSilenceMs,
         server_auto_endpoint: false,
         stt_language: S.languagePref,
-        language: S.languagePref === "ta-IN" ? "ta-IN" : "",
+        language: explicitSelectedLang(),
       }));
     } catch {}
   }
@@ -1800,8 +1844,8 @@ function sendWsConfig() {
 
 $("#lang-select")?.addEventListener("change", (e) => {
   S.languagePref = e.target.value || "indic-auto";
-  if (S.languagePref === "ta-IN") S.detectedLang = "ta-IN";
-  else if (S.languagePref === "hi-IN") S.detectedLang = "hi-IN";
+  const chosen = explicitSelectedLang();
+  if (chosen) S.detectedLang = chosen;
   sendWsConfig();
 });
 
@@ -2138,7 +2182,7 @@ async function startCallSession(opts = {}) {
     await wsPromise;
     window.speechSynthesis?.cancel?.();
 
-    const explicitStartLang = S.languagePref === "ta-IN" ? "ta-IN" : "";
+    const explicitStartLang = explicitSelectedLang();
     if (WS.open && WS.sock && WS.sock.readyState === 1) {
       await new Promise((resolve) => {
         WS.pendingTurnResolve = resolve;

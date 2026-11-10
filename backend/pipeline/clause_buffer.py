@@ -15,30 +15,12 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
+from backend.i18n import all_hook_patterns, get_lang_bundle
+
 MAX_CLAUSES = 2
 
-# Hinglish & Tamil hooks that MUST land in Clause 1 (instant empathy/urgency)
-_HOOK_SPLIT_PATTERNS = [
-    r"Shukar hai[^.!?]*[.!?]",
-    r"Theek hai[^.!?]*[.!?]",
-    r"Samajh gay[ai][^.!?]*[.!?]",
-    r"Aapki jaan[^.!?]*[.!?]",
-    r"Bilkul[^.!?]*[.!?]",
-    r"Achha ji[^.!?]*[.!?]",
-    r"Haan ji[^.!?]*[.!?]",
-    r"Arre[^.!?]*[.!?]",
-    r"Namaste[^.!?]*[.!?]",
-    r"Confirm ho gaya[^.!?]*[.!?]",
-    # Native Tamil fast-empathy hooks
-    r"வணக்கம்[^.!?]*[.!?]",
-    r"நல்லவேளை[^.!?]*[.!?]",
-    r"மிக்க நன்றி[^.!?]*[.!?]",
-    r"சரிங்க[^.!?]*[.!?]",
-    r"புரிந்ததுங்க[^.!?]*[.!?]",
-    r"கண்டிப்பாக[^.!?]*[.!?]",
-    r"உங்கள் உயிர்[^.!?]*[.!?]",
-    r"உறுதி செய்யப்பட்டது[^.!?]*[.!?]",
-]
+# All-India fast-empathy/triage hooks across all 10 Gnani languages
+_HOOK_SPLIT_PATTERNS = all_hook_patterns()
 # Protected dotted acronyms / titles that must NEVER trigger a sentence split
 _DOT_ABBREV_RE = re.compile(
     r"\b(?:I\.R\.D\.A\.I\.|N\.H\.|Pvt\.|Ltd\.|Dr\.|Mr\.|Mrs\.|Rs\.|No\.|St\.)",
@@ -94,12 +76,7 @@ def split_into_clauses(reply_text: str, turn_id: str = "t0", language: str = "hi
     text = (reply_text or "").strip()
     batch = ClauseBatch(turn_id=turn_id)
     if not text:
-        fallback = (
-            "வணக்கம், சொல்லுங்கள்—நான் உங்களுக்கு உதவத் தயாராக இருக்கிறேன்."
-            if language == "ta-IN"
-            else "Ji, boliye main aapki madad kar rahi hoon."
-        )
-        batch.add(fallback, True)
+        batch.add(get_lang_bundle(language)["empty_clause"], True)
         return batch
 
     sentences = _split_sentences(text)

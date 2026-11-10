@@ -24,6 +24,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from backend.i18n import (
+    ALL_GNANI_LANGUAGES,
+    LANG_META,
+    SCRIPT_REGEX_BY_LANG,
+    STRINGS,
+    format_range,
+    get_lang_bundle,
+    normalize_lang_code,
+)
 from backend.rsa_and_claim_rules import (
     IRDAI,
     PARTS,
@@ -46,24 +55,12 @@ from backend.translit import detect_script_language, normalize_for_matching
 _MEMORY_PATH = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) / "data" / "call_history.json"
 _HISTORY_LOCK = threading.Lock()
 
-GREETING_CLAUSE_1 = "Namaste! Main BimaVani Roadside Helpline se bol rahi hoon."
-GREETING_CLAUSE_2 = "Sabse pehle batayein—kya aap aur gaadi mein baithe sabhi log safe hain, ya kisi ko chot lagi hai?"
+GREETING_CLAUSE_1 = STRINGS["hi-IN"]["greet_1"]
+GREETING_CLAUSE_2 = STRINGS["hi-IN"]["greet_2"]
+GREETING_CLAUSE_1_TA = STRINGS["ta-IN"]["greet_1"]
+GREETING_CLAUSE_2_TA = STRINGS["ta-IN"]["greet_2"]
 
-GREETING_CLAUSE_1_TA = "வணக்கம்! நான் பீமாவாணி சாலை உதவி மையத்திலிருந்து பேசுகிறேன்."
-GREETING_CLAUSE_2_TA = "முதலில் சொல்லுங்கள்—நீங்களும் காரில் உள்ள அனைவரும் பாதுகாப்பாக இருக்கிறீர்களா, அல்லது யாருக்காவது காயம் ஏற்பட்டதா?"
-
-_TAMIL_SCRIPT_RE = re.compile(r"[\u0B80-\u0BFF]")
-
-
-def _normalize_lang_code(lang: Optional[str]) -> Optional[str]:
-    v = (lang or "").strip().lower()
-    if not v or v in ("auto", "indic-auto"):
-        return None
-    if v.startswith("ta") or "tamil" in v:
-        return "ta-IN"
-    if v.startswith("hi") or "hindi" in v or "hinglish" in v:
-        return "hi-IN"
-    return None
+_normalize_lang_code = normalize_lang_code
 
 # Stage tokens
 ST_SAFETY_TRIAGE = "safety_triage"
@@ -74,36 +71,43 @@ ST_EMERGENCY = "emergency_handoff"
 ST_DONE = "done"
 
 SAFE_ACK = re.compile(
-    r"\b(?:safe|sabhi thik|sabhi theek|sab thik|sab theek|kisi ko .*nahi|nahi hai chot|unhurt|haan safe)\b",
+    r"\b(?:safe|everyone is safe|we are safe|nobody is injured|no one is injured|unhurt|uninjured|"
+    r"sabhi thik|sabhi theek|sab thik|sab theek|kisi ko .*nahi|nahi hai chot|haan safe)\b",
     re.I,
 )
 
 _PROBLEM_SIGNALS = (
     "problem", "dikkat", "takleef", "madad", "help", "kharab", "kharaab",
     "band", "start nahi", "chal nahi", "ruk gayi", "breakdown", "accident",
-    "crash", "tow", "smoke", "leak", "awaz", "awaaz", "issue",
+    "crash", "tow", "smoke", "smoking", "leak", "leaking", "awaz", "awaaz", "issue",
     "phat", "toot", "tut", "gir", "stuck", "hang", "fail", "dead", "khatam",
+    "broke", "broken", "damaged", "damage", "flat", "puncture", "stalled",
+    "won't start", "wont start", "not starting", "not working",
 )
 
 _ROAD_HINT_RE = re.compile(
     r"\b(?:nh[-\s]?\d+|nh|national highway|highway|haaiway|haaive|haiwe|"
-    r"expressway|expresway|gt road|kmp|ring road|city|sheher|shahar|"
+    r"expressway|expresway|gt road|kmp|ring road|city|town|sheher|shahar|"
     r"ga[ao]nv?|gaav|village|link road|local road|rural|kaccha|kachcha|"
     r"delhi|new delhi|dilli|mumbai|karnal|panipat|chennai|meerut|"
-    r"noida|gurgaon|gurugram|faridabad|chandigarh|ambala|sonipat|jaipur|lucknow|pune)\b",
+    r"bengaluru|bangalore|hyderabad|kochi|thiruvananthapuram|kolkata|pune|"
+    r"ahmedabad|surat|ludhiana|amritsar|jalandhar|vadodara|mysuru|"
+    r"noida|gurgaon|gurugram|faridabad|chandigarh|ambala|sonipat|jaipur|lucknow)\b",
     re.I,
 )
 _EXPLICIT_NON_NH_RE = re.compile(
-    r"\b(?:city|sheher|shahar|ga[ao]nv?|gaav|village|link road|local road|rural|kaccha|kachcha)\b",
+    r"\b(?:city|town|sheher|shahar|ga[ao]nv?|gaav|village|link road|local road|rural|kaccha|kachcha)\b",
     re.I,
 )
 _NH_TERM_RE = re.compile(
     r"\b(?:nh[-\s]?\d*|national highway|highway|haaiway|haaive|haiwe|expressway|expresway|gt road|kmp|ring road)\b",
     re.I,
 )
-_PAUSE_RE = re.compile(r"\b(?:ruko|ruk ja|rukja|hold on|pause|ek second|ek minute)\b", re.I)
-_INTERRUPT_CORRECTION_RE = re.compile(r"\b(?:galat|wrong|nahi|nai|badlo|change|correct|sahi|actually|asli)\b", re.I)
-_DEVANAGARI_RE = re.compile(r"[\u0900-\u097F]")
+_PAUSE_RE = re.compile(r"\b(?:ruko|ruk ja|rukja|hold on|pause|one moment|one second|ek second|ek minute)\b", re.I)
+_INTERRUPT_CORRECTION_RE = re.compile(r"\b(?:galat|wrong|incorrect|mistake|nahi|nai|badlo|change|correct|sahi|actually|asli)\b", re.I)
+_DEVANAGARI_RE = re.compile(r"[\u0901-\u0963\u0966-\u097F]")
+_OTHER_INDIC_EXCEPT_DEV_RE = re.compile(r"[\u0980-\u0D7F]")
+_ANY_INDIC_RE = re.compile(r"[\u0901-\u0963\u0966-\u0D7F]")
 
 
 def _looks_like_vehicle_problem(low: str, parts: List[str],
@@ -286,8 +290,9 @@ _AGENT_SYSTEM = (
     "SITUATION\n"
     "You are BimaVani, the voice agent on a 24x7 Indian roadside-assistance and "
     "motor-insurance helpline (1-800-BIMA-VANI). The caller is a driver, usually "
-    "stranded, stressed and speaking Hinglish or Tamil, sometimes from a noisy highway "
-    "or a village road. You are the calm, experienced person on the other end.\n"
+    "stranded, stressed and speaking any of India's major languages (Hindi/Hinglish, "
+    "Tamil, Telugu, Kannada, Malayalam, Bengali, Marathi, Gujarati, Punjabi, or Indian English), "
+    "sometimes from a noisy highway or a village road. You are calm and helpful.\n"
     "\n"
     "YOUR JOB, IN ORDER\n"
     "1. Make sure people are safe (injury first, always).\n"
@@ -296,9 +301,10 @@ _AGENT_SYSTEM = (
     "4. Say exactly what happens next and when.\n"
     "\n"
     "HOW YOU SPEAK\n"
-    "- Follow CONTEXT.response_language strictly: if 'ta-IN', write 100% natural "
-    "  native Tamil script (தமிழ்) ONLY — NEVER English and NEVER Hindi/Hinglish; "
-    "  otherwise write Roman Hinglish only (never Devanagari script). Warm, plain, human.\n"
+    "- Follow CONTEXT.response_language strictly: use ONLY that language and its "
+    "  native script (Tamil தமிழ், Telugu తెలుగు, Kannada ಕನ್ನಡ, Malayalam മലയാളം, "
+    "  Bengali বাংলা, Marathi मराठी, Gujarati ગુજરાતી, Punjabi ਪੰਜਾਬੀ, Indian English, "
+    "  or Roman Hinglish for hi-IN — NEVER mix Hindi/English into regional replies).\n"
     "- AT MOST 2 short spoken clauses — this is read aloud by TTS.\n"
     "- ONE question per turn. Never re-ask what CONTEXT already answers.\n"
     "- Vary your acknowledgements; never repeat the same opener twice in a row.\n"
@@ -483,22 +489,25 @@ def _agent_context(mem: "CallMemory", transcript: str,
                 "nhai_patrol_alerted": t.get("nhai_patrol_alerted"),
             }
         elif t.get("tool") == "calculate_irdai_claim_draft":
+            low_inr = t.get("estimated_repair_low_inr", 0)
+            high_inr = t.get("estimated_repair_high_inr", 0)
             tool_facts["claim_draft"] = {
                 "claim_id": t.get("claim_id"),
-                "estimated_range": (
-                    t.get("estimated_range_display_ta") if lang == "ta-IN"
-                    else t.get("estimated_range_display")
-                ),
+                "estimated_range": format_range(low_inr, high_inr, lang),
                 "status": t.get("status_label"),
             }
+    lang_meta = LANG_META.get(lang, LANG_META["hi-IN"])
+    lang_rule = (
+        f"Native {lang_meta['name']} ({lang_meta['native']}) ONLY — never mix Hindi or English, max 2 short clauses"
+        if lang not in ("hi-IN", "en-IN")
+        else ("Natural Indian English only, female voice, max 2 short clauses"
+              if lang == "en-IN"
+              else "Roman Hinglish, female voice, max 2 short clauses")
+    )
     return {
         "persona": "BimaVani — 24x7 Indian roadside assistance + insurance helpline",
         "response_language": lang,
-        "language": (
-            "Native Tamil script (தமிழ்) ONLY — NEVER English and NEVER Hindi/Hinglish, female voice, max 2 short clauses"
-            if lang == "ta-IN"
-            else "Roman Hinglish, female voice, max 2 short clauses"
-        ),
+        "language": lang_rule,
         "conversation_history": history,
         "interrupted_context": bool(mem.entities.get("was_interrupted")),
         "last_interruption": mem.entities.get("last_interruption"),
@@ -529,7 +538,7 @@ def _agent_context(mem: "CallMemory", transcript: str,
         "recommended_action": recommended_action,
         "deterministic_reply": deterministic_reply,
         "hard_rules": [
-            "Strictly respond in CONTEXT.response_language ('ta-IN' => native Tamil script only, NO English/Hindi).",
+            f"Strictly respond in CONTEXT.response_language ({lang}: {lang_meta['native']}).",
             "Never invent numbers, policies, ETAs, amounts or coverage.",
             "Never ask two questions in one turn.",
             "Never re-ask an answered question (see conversation_history/state).",
@@ -627,11 +636,8 @@ class Brain:
         mem.entities["call_started"] = True
         mem.set_stage(ST_SAFETY_TRIAGE)
         mem.ticket_status = "CALL ACTIVE — STAGE 1 SAFETY TRIAGE"
-        g1, g2 = (
-            (GREETING_CLAUSE_1_TA, GREETING_CLAUSE_2_TA)
-            if lang == "ta-IN"
-            else (GREETING_CLAUSE_1, GREETING_CLAUSE_2)
-        )
+        b = get_lang_bundle(lang)
+        g1, g2 = b["greet_1"], b["greet_2"]
         reply = f"{g1} {g2}"
         mem.incident_speakable = reply
         mem.push_utterance("agent(greeting)", reply, {"language": lang})
@@ -658,13 +664,15 @@ class Brain:
         mem = self.get_or_create_call(call_id)
         detected_lang = detect_script_language(transcript or "")
         explicit_lang = _normalize_lang_code(language) or _normalize_lang_code(
-            str(stt_meta.get("language") or "")
+            str(stt_meta.get("language") or stt_meta.get("detected_language_code") or "")
         )
         prev_lang = mem.entities.get("language")
         if detected_lang:
-            lang = detected_lang
-        elif prev_lang == "ta-IN":
-            lang = "ta-IN"
+            # Keep locked regional session unless caller explicitly switched UI to en-IN
+            if detected_lang == "en-IN" and prev_lang and prev_lang not in ("hi-IN", "en-IN") and explicit_lang != "en-IN":
+                lang = prev_lang
+            else:
+                lang = detected_lang
         elif explicit_lang:
             lang = explicit_lang
         else:
@@ -717,7 +725,7 @@ class Brain:
         )
 
         is_drivable, drivable_reason = detect_drivability(parts, transcript)
-        triage = triage_injury_and_safety(transcript)
+        triage = triage_injury_and_safety(transcript, language=lang)
         confirm = confirm_detection(transcript, prior_policy=prior_policy)
         was_interrupted = bool(mem.entities.get("was_interrupted"))
         has_real_change = policy_changed or road_changed or parts_changed
@@ -741,6 +749,7 @@ class Brain:
         tools: List[Dict[str, Any]] = [triage]
         draft = None
         dispatch = None
+        bundle = get_lang_bundle(lang)
 
         # ---------------- STAGE 1: EMERGENCY (never skipped) ----------------
         stay_in_emergency = (
@@ -771,24 +780,15 @@ class Brain:
                 mem.set_stage(ST_CONFIRM)
                 mem.ticket_status = "CONFIRM_PENDING (corrected)"
             elif _PAUSE_RE.search(low) and not has_real_change:
-                # Caller just asked us to hold on ("ek second ruko" / "இருங்க") — do NOT mint a new FNOL
                 dispatch = mem.entities.get("last_dispatch")
                 draft = mem.entities.get("last_draft")
-                reply = (
-                    "சரிங்க, நான் காத்திருக்கிறேன். நீங்கள் தயாரானதும் அல்லது ஏதேனும் மாற்றம் செய்ய வேண்டுமானால் சொல்லுங்கள்."
-                    if lang == "ta-IN"
-                    else "Haan ji, main ruki hoon. Jab aap ready hon ya kuch badalna ho toh batayein."
-                )
+                reply = bundle["pause"]
             elif mem.entities.get("last_draft") or (policy_number and parts):
                 dispatch, draft, reply = self._dispatch_and_readback(mem, low, tools)
                 mem.set_stage(ST_CONFIRM)
                 mem.ticket_status = "CONFIRM_PENDING (corrected)"
             else:
-                reply = (
-                    "கண்டிப்பாக, நான் கேட்டுக்கொண்டிருக்கிறேன் — சரியான விவரங்களைச் சொல்லுங்கள், என்ன மாற்ற வேண்டும்?"
-                    if lang == "ta-IN"
-                    else "Ji bilkul, main sun rahi hoon — sahi details batayein, kya badalna hai?"
-                )
+                reply = bundle["correct_prompt"]
 
         # ---------------- STAGE 3 close: confirm ONLY when draft/dispatch ready
         elif confirm == "confirm" and (
@@ -876,6 +876,7 @@ class Brain:
                                ask_confirm: bool = True) -> tuple:
         entities = mem.entities
         lang = entities.get("language") or "hi-IN"
+        b = get_lang_bundle(lang)
         policy_number = entities.get("policy_number")
         policy = POLICIES.get(str(policy_number or "")) or (
             _dynamic_policy(policy_number) if policy_number else None
@@ -904,40 +905,16 @@ class Brain:
             language=lang,
         )
         if not ask_confirm and draft:
-            reply += (
-                " இரண்டு கோரிக்கைகளும் உறுதி செய்யப்பட்டுவிட்டன."
-                if lang == "ta-IN"
-                else " Dono tickets lock kar diye gaye hain."
-            )
+            reply += b["tickets_locked"]
         return dispatch, draft, reply
 
     def _ack(self, mem: CallMemory) -> str:
         lang = mem.entities.get("language") or "hi-IN"
+        b = get_lang_bundle(lang)
         driver_turns = sum(1 for u in mem.utterances if u.get("role") == "driver")
-        if lang == "ta-IN":
-            if driver_turns <= 1:
-                return "நல்லவேளை, நீங்கள் பாதுகாப்பாக இருக்கிறீர்கள்!"
-            variants_ta = [
-                "சரிங்க, குறித்துக்கொண்டேன்.",
-                "புரிந்ததுங்க.",
-                "ஆமாம், கண்டிப்பாக.",
-                "புரிந்ததுங்க, அடுத்து பார்ப்போம்.",
-                "சரிங்க, நான் பார்த்துக்கொள்கிறேன்.",
-            ]
-            idx = (driver_turns - 2 + sum(ord(c) for c in mem.call_id)) % len(variants_ta)
-            return variants_ta[idx]
         if driver_turns <= 1:
-            return "Shukar hai aap safe hain!"
-        variants = [
-            "Theek hai ji, note kar liya.",
-            "Achha ji, samajh gayi.",
-            "Haan ji, bilkul.",
-            "Samajh gayi ji, aage badhte hain.",
-            "Theek hai, main samajh gayi.",
-            "Boliye, main sun rahi hoon.",
-            "Achha, aage badhte hain.",
-            "Haan ji, note kar liya hai.",
-        ]
+            return b["ack_first"]
+        variants = b["acks"]
         idx = (driver_turns - 2 + sum(ord(c) for c in mem.call_id)) % len(variants)
         return variants[idx]
 
@@ -974,21 +951,39 @@ class Brain:
         llm_action: str = "",
         recommended_action: str = "",
     ) -> bool:
-        """Reject LLM output that drifts from ground truth or violates TTS constraints."""
+        """Reject LLM output that drifts from ground truth, language/script, or TTS limits."""
         lang = mem.entities.get("language") or "hi-IN"
-        if not text or len(text) > 360:
+        if not text or len(text) > 520:
             return False
-        if _DEVANAGARI_RE.search(text):
-            return False
-        if lang == "ta-IN":
-            if not _TAMIL_SCRIPT_RE.search(text):
+        if lang == "hi-IN":
+            if _DEVANAGARI_RE.search(text) or _OTHER_INDIC_EXCEPT_DEV_RE.search(text):
                 return False
-            # Reject stray Roman/English/Hinglish words in native Tamil replies
-            if re.search(r"\b(?!(?:NH|EV|OK)\b)[A-Za-z]{3,}\b", text):
+            # Reject pure English LLM drift without any Hinglish words
+            if (
+                re.search(r"\b(?:sorry|please provide|please share|please tell|i am|we are|your vehicle)\b", text, re.I)
+                and not re.search(r"\b(?:aap|aapka|aapki|hai|hain|nahi|kya|bhej|kijiye|gaadi|chot|shukar|samajh|hoon|ji|mein|par|se|ka|ki|ke)\b", text, re.I)
+            ):
+                return False
+        elif lang == "en-IN":
+            if _ANY_INDIC_RE.search(text):
+                return False
+            if re.search(r"\b(?:aap|hai|hain|nahi|nahin|kya|bhej|kijiye|gaadi|chot|shukar|samajh|hoon)\b", text, re.I):
+                return False
+        elif lang == "mr-IN":
+            if not _DEVANAGARI_RE.search(text) or _OTHER_INDIC_EXCEPT_DEV_RE.search(text):
+                return False
+            if re.search(r"\b(?!(?:NH|EV|OK|FNOL|RSA)\b)[A-Za-z]{3,}\b", text):
+                return False
+        elif lang in SCRIPT_REGEX_BY_LANG:
+            if not SCRIPT_REGEX_BY_LANG[lang].search(text):
+                return False
+            if _DEVANAGARI_RE.search(text):
+                return False
+            # Reject stray Latin/English/Hinglish words in native regional replies
+            if re.search(r"\b(?!(?:NH|EV|OK|FNOL)\b)[A-Za-z]{3,}\b", text):
                 return False
         if len(split_into_clauses(text, language=lang).clauses) > 2:
             return False
-        # Reject conflicting action override (e.g. closing when policy/problem is still needed)
         if recommended_action in ("ask_problem", "ask_location", "ask_policy") and llm_action in ("close", "dispatch"):
             return False
         low = normalize_for_matching(text).lower()
@@ -1003,17 +998,27 @@ class Brain:
             "claim file" in low or "claim apply" in low
             or "policy number" in low or "policy batayein" in low
             or "பாலிசி எண்" in text or "காப்பீட்டு கோரிக்கை போட" in text
+            or "file a claim" in low or "claim the" in low
         ):
             return False
         if not e.get("policy_number") and extract_policy_number(text):
             return False
-        if not triage.get("injured") and mem.stage != ST_EMERGENCY and ("112" in low and ("ambulance" in low or "ஆம்புலன்ஸ்" in text)):
+        if not triage.get("injured") and mem.stage != ST_EMERGENCY and (
+            "112" in low
+            and re.search(
+                r"(?:ambulance|ஆம்புலன்ஸ்|అంబులెన్స్|ಆಂಬುಲೆನ್ಸ್|ആംബുലൻസ്|অ্যাম্বুলেন্স|ॲम्ब्युलन्स|एम्बुलेंस|ਐਂਬੂਲੈਂਸ)",
+                low,
+                re.I,
+            )
+        ):
             return False
-        # Reject hallucinated ₹ figures when there is no claim draft or rural reimbursement
         draft = e.get("last_draft") or {}
         disp = e.get("last_dispatch") or {}
         has_money = bool(draft.get("estimated_range_display") or (disp.get("rural_reimbursement") or {}).get("eligible"))
-        if ("₹" in text or "ரூபாய்" in text or re.search(r"\brupaye\b", low)) and not has_money:
+        if (
+            re.search(r"(?:₹|ரூபாய்|రూపాయ|ರೂಪಾಯಿ|രൂപ|টাকা|रुपये|રૂપિયા|ਰੁਪਏ|\brupaye\b|\brupees\b)", text, re.I)
+            and not has_money
+        ):
             return False
         return True
 
@@ -1022,6 +1027,7 @@ class Brain:
         stage = mem.stage or ST_SAFETY_TRIAGE
         entities = mem.entities
         lang = entities.get("language") or "hi-IN"
+        b = get_lang_bundle(lang)
         parts = entities.get("parts", []) or []
         minor_only = (
             bool(parts)
@@ -1029,53 +1035,23 @@ class Brain:
             and entities.get("is_drivable", True)
         )
         part_word = spoken_part(parts, language=lang)
-
         has_problem = _looks_like_vehicle_problem(low, parts, triage)
 
         if stage == ST_SAFETY_TRIAGE and not has_problem:
             mem.set_stage(ST_INCIDENT)
-            if lang == "ta-IN":
-                if entities.get("policy_number"):
-                    reply = (
-                        f"மிக்க நன்றி — பாலிசி எண் {entities['policy_number']} குறித்துக்கொள்ளப்பட்டது. "
-                        "இப்போது வண்டிக்கு என்ன ஆயிற்று என்று சொல்லுங்கள்?"
-                    )
-                else:
-                    reply = (
-                        "மிக்க நன்றி — அனைவரும் பாதுகாப்பாக இருப்பதே மிக முக்கியம். "
-                        "இப்போது வண்டிக்கு என்ன ஆயிற்று என்று சொல்லுங்கள்?"
-                    )
+            if entities.get("policy_number"):
+                reply = b["safety_pol"].format(pol=entities["policy_number"])
             else:
-                if entities.get("policy_number"):
-                    reply = (
-                        f"Bahut shukriya ji — policy {entities['policy_number']} note kar li hai. "
-                        "Ab bataiye, gaadi ko kya hua?"
-                    )
-                else:
-                    reply = (
-                        "Bahut shukriya ji — aap sab safe hain, yahi sabse badi baat hai. "
-                        "Ab bataiye, gaadi ko kya hua?"
-                    )
+                reply = b["safety_ok"]
             mem.ticket_status = "STAGE 2 — INCIDENT DETAILS IN PROGRESS"
             return reply, None, None, mem
 
         if has_problem or parts:
-            # Generic problem reported ("gaadi band ho gayi" / "வண்டி கெட்டுப் போச்சு") without any identified part yet
             if not parts:
                 mem.set_stage(ST_INCIDENT)
                 mem.ticket_status = "STAGE 2 — PART / DAMAGE DETAILS NEEDED"
-                if lang == "ta-IN":
-                    pol_note = f"பாலிசி எண் {entities['policy_number']} குறித்துக்கொள்ளப்பட்டது. " if entities.get("policy_number") else ""
-                    reply = (
-                        f"{pol_note}புரிந்ததுங்க — வண்டியில் சரியாக என்ன பிரச்சினை? "
-                        "ரேடியேட்டர் அல்லது என்ஜின் பிரச்சினையா, டயர் பஞ்சரா, பேட்டரி பழுதா, அல்லது வெளிப்புற சேதமா?"
-                    )
-                else:
-                    pol_note = f"Policy {entities['policy_number']} note hai. " if entities.get("policy_number") else ""
-                    reply = (
-                        f"{pol_note}Samajh gayi ji — gaadi mein exact kya problem aa rahi hai? "
-                        "Kya radiator ya engine ka issue hai, tyre puncture hai, battery dead hai, ya bahar ka dent?"
-                    )
+                pol_note = b["pol_note"].format(pol=entities["policy_number"]) if entities.get("policy_number") else ""
+                reply = pol_note + b["ask_part"]
                 return reply, None, None, mem
 
             if minor_only:
@@ -1084,16 +1060,8 @@ class Brain:
                 if not entities.get("road_explicit"):
                     mem.set_stage(ST_INCIDENT)
                     mem.ticket_status = "STAGE 2 — LOCATION NEEDED (minor repair)"
-                    if lang == "ta-IN":
-                        reply = (
-                            f"{part_word + ' பிரச்சினையா? ' if part_word else ''}"
-                            "கவலைப்படாதீர்கள். நீங்கள் இப்போது நகரத்திற்குள் இருக்கிறீர்களா அல்லது நெடுஞ்சாலையில் இருக்கிறீர்களா?"
-                        )
-                    else:
-                        reply = (
-                            f"{part_word.capitalize() if part_word else 'Achha'}? "
-                            "Koi baat nahi ji. Aap abhi city ke andar hain, ya highway par?"
-                        )
+                    pp = b["minor_part_prefix"].format(part=part_word) if part_word else b["minor_part_empty"]
+                    reply = b["ask_loc_minor"].format(part_prefix=pp)
                     return reply, None, None, mem
                 dispatch, _draft, reply = self._dispatch_and_readback(
                     mem, low, tools, ask_confirm=False
@@ -1106,27 +1074,10 @@ class Brain:
                 mem.set_stage(ST_INCIDENT)
                 mem.ticket_status = "STAGE 2 — ROAD TYPE NEEDED"
                 dt = sum(1 for u in mem.utterances if u.get("role") == "driver")
-                if lang == "ta-IN":
-                    road_variants_ta = [
-                        "நீங்கள் இப்போது தேசிய நெடுஞ்சாலையில் இருக்கிறீர்களா, நகர சாலையில் இருக்கிறீர்களா, அல்லது கிராமத்து சாலையில் இருக்கிறீர்களா?",
-                        "நீங்கள் எங்கே இருக்கிறீர்கள் — நெடுஞ்சாலையா, நகரத்திற்குள்ளா, அல்லது கிராமப்புற சாலையா?",
-                    ]
-                    road_q = road_variants_ta[dt % len(road_variants_ta)]
-                    reply = (
-                        f"{part_word + ' பிரச்சினையா? ' if part_word else ''}"
-                        "புரிந்ததுங்க. " + road_q
-                    )
-                else:
-                    road_variants = [
-                        "Aap abhi National Highway par hain, sheher ke road par, ya gaon wali link road par?",
-                        "Aap kahan hain — highway par, sheher ke andar, ya gaon ki link road par?",
-                        "Kahan par hua ye sab — NH par, city road par, ya rural link road par?",
-                    ]
-                    road_q = road_variants[dt % len(road_variants)]
-                    reply = (
-                        f"{part_word.capitalize() + ' ka issue? ' if part_word else ''}"
-                        "Achha, samajh gayi. " + road_q
-                    )
+                roads = b["ask_roads"]
+                road_q = roads[dt % len(roads)]
+                pp = b["major_part_prefix"].format(part=part_word) if part_word else ""
+                reply = b["ask_loc_lead"].format(part_prefix=pp) + road_q
                 return reply, None, None, mem
 
             dispatch, draft, reply = self._dispatch_and_readback(
@@ -1136,119 +1087,63 @@ class Brain:
                 mem.set_stage(ST_CONFIRM)
                 mem.ticket_status = "CONFIRM_PENDING"
                 if not (entities.get("confirm_intent") == "confirm") and not reply.rstrip().endswith("?"):
-                    reply += (
-                        " உங்கள் காப்பீட்டு கோரிக்கையை பதிவு செய்யவா?"
-                        if lang == "ta-IN"
-                        else " Kya main aapka insurance claim apply kar doon?"
-                    )
+                    reply += b["ask_confirm_q"]
             else:
                 mem.set_stage(ST_POLICY)
                 mem.ticket_status = "RSA DISPATCH-PENDING — FNOL AWAITING POLICY NUMBER"
-                if lang == "ta-IN":
-                    policy_variants_ta = [
-                        " காப்பீட்டு கோரிக்கை மற்றும் உதவியை உறுதி செய்ய உங்கள் 4 இலக்க பாலிசி எண்ணைச் சொல்லுங்கள்.",
-                        " உதவி மற்றும் கோரிக்கையைப் பதிவு செய்ய உங்கள் நான்கு இலக்க பாலிசி எண்ணைக் கூறுங்கள்.",
-                    ]
-                    p_idx = sum(1 for u in mem.utterances if u.get("role") == "driver") % len(policy_variants_ta)
-                    reply += policy_variants_ta[p_idx]
-                else:
-                    policy_variants = [
-                        " Insurance claim lagane aur dispatch lock karne ke liye apna 4-digit policy number batayein.",
-                        " Claim aur dispatch lock karane ke liye apna char anka policy number de dijiye.",
-                        " Policy number batayein taaki claim aur dispatch dono confirm ho sakein.",
-                    ]
-                    p_idx = sum(1 for u in mem.utterances if u.get("role") == "driver") % len(policy_variants)
-                    reply += policy_variants[p_idx]
+                pols = b["ask_pols"]
+                p_idx = sum(1 for u in mem.utterances if u.get("role") == "driver") % len(pols)
+                reply += pols[p_idx]
             return reply, dispatch, draft, mem
 
         mem.set_stage(ST_INCIDENT)
         mem.ticket_status = "STAGE 2 — INCIDENT DETAILS IN PROGRESS"
-        reply = (
-            "சொல்லுங்கள், வண்டிக்கு என்ன ஆயிற்று — என்ன பிரச்சினை ஏற்பட்டுள்ளது?"
-            if lang == "ta-IN"
-            else "Ji bataiye, gaadi ke saath kya hua hai — kya takleef aa rahi hai?"
-        )
-        return reply, None, None, mem
+        return b["ask_incident"], None, None, mem
 
     def _already_done_reply(self, mem: CallMemory) -> str:
         lang = mem.entities.get("language") or "hi-IN"
+        b = get_lang_bundle(lang)
         d = mem.entities.get("last_dispatch") or {}
         draft = mem.entities.get("last_draft") or {}
-        if lang == "ta-IN":
-            if d.get("workflow") == "A":
-                return (
-                    f"உதவி ஏற்கனவே அனுப்பப்பட்டுவிட்டது — சுமார் {d.get('eta_mins', 22)} நிமிடங்களில் பணியாளர் வந்துவிடுவார். "
-                    "காப்பீட்டு கோரிக்கை தேவையில்லை, உங்கள் 20 சதவீத போனஸ் சலுகை பாதுகாப்பாக உள்ளது."
-                )
-            claim_ref = f"கோரிக்கை எண் {draft['claim_id']} " if draft.get("claim_id") else "உங்கள் கோரிக்கை "
-            eta_ref = (
-                f"உதவி சுமார் {d['eta_mins']} நிமிடங்களில் வந்துவிடும்"
-                if d.get("eta_mins")
-                else "பழுதுபார்க்கும் மைய விவரங்கள் பகிரப்பட்டுள்ளன"
-            )
-            return (
-                f"{claim_ref}ஏற்கனவே உறுதி செய்யப்பட்டுவிட்டது, {eta_ref}. "
-                "வேறு ஏதேனும் விவரம் மாற்ற வேண்டுமா அல்லது கூடுதல் உதவி தேவையா?"
-            )
         if d.get("workflow") == "A":
-            return (
-                f"Dispatch already active hai ji — mechanic lagbhag {d.get('eta_mins', 22)} minute mein pahunch raha hai. "
-                "Claim file karne ki zaroorat nahi, aapka 20 percent No-Claim Bonus bilkul safe hai."
-            )
-        claim_ref = f"Claim {draft['claim_id']} " if draft.get("claim_id") else "Aapka claim "
-        eta_ref = f"aur help lagbhag {d['eta_mins']} minute mein pahunch rahi hai" if d.get("eta_mins") else "aur cashless garage details shared hain"
-        return (
-            f"{claim_ref}already lock ho chuka hai, {eta_ref}. "
-            "Kya aapko koi detail change karni hai ya aur madad chahiye?"
+            return b["done_a"].format(eta=d.get("eta_mins", 22))
+        claim_ref = (
+            b["done_claim_ref"].format(cid=draft["claim_id"])
+            if draft.get("claim_id")
+            else b["done_claim_default"]
         )
+        eta_ref = (
+            b["done_eta_ref"].format(eta=d["eta_mins"])
+            if d.get("eta_mins")
+            else b["done_garage_ref"]
+        )
+        return b["done_bc"].format(claim_ref=claim_ref, eta_ref=eta_ref)
 
     def _emergency_reply(self, mem: CallMemory) -> str:
         lang = mem.entities.get("language") or "hi-IN"
+        b = get_lang_bundle(lang)
         nh = bool(mem.entities.get("nhai_patrol"))
         mem.entities["emergency_calls"] = [
             {"line": "112", "label": "🚨 112 AMBULANCE DISPATCHED"},
             {"line": "112-POLICE", "label": "👮 112 POLICE DISPATCHED"},
             *([{"line": "1033", "label": "🛣️ 1033 NHAI HIGHWAY PATROL"}] if nh else []),
         ]
-        if lang == "ta-IN":
-            c1 = (
-                "உங்கள் உயிர் தான் மிக முக்கியம் — உடனடியாக 112 ஆம்புலன்ஸ் மற்றும் 112 காவல்துறையை "
-                "அனுப்புகிறேன், தயவுசெய்து அழைப்பைத் துண்டிக்காதீர்கள்."
-            )
-            c2 = (
-                "அவசர உதவி அதிகாரியுடன் உங்களை நேரடியாக இணைக்கிறேன்"
-                + (", மேலும் 1033 நெடுஞ்சாலை ரோந்துப் படையும் உங்கள் இடத்திற்கு வருகிறது." if nh else ".")
-                + " பாதுகாப்பான இடத்தில் இருங்கள், இணைப்பில் காத்திருங்கள்."
-            )
-            return f"{c1} {c2}"
-        c1 = ("Aapki jaan sabse pehle hai — main turant 112 ambulance aur 112 police "
-              "bhej rahi hoon, kripya phone na kaatein.")
-        c2 = ("Ek emergency officer aapko directly connect kar rahi hoon"
-              + (", aur 1033 highway patrol bhi aapke location par aa raha hai." if nh else ".")
-              + " Surakshit jagah par rahein, line par bane rahiye.")
+        c1 = b["emg_c1"]
+        c2 = b["emg_c2"] + (b["emg_c2_nh"] if nh else ".") + b["emg_c2_tail"]
         return f"{c1} {c2}"
 
     def _closing_reply(self, dispatch: Optional[Dict[str, Any]],
                        draft: Optional[Dict[str, Any]],
                        language: str = "hi-IN") -> str:
-        if language == "ta-IN":
-            c1 = (
-                "உறுதி செய்யப்பட்டது — உங்கள் காப்பீட்டு கோரிக்கை பதிவு செய்யப்பட்டு "
-                "சாலை உதவி அனுப்பப்பட்டுவிட்டது."
-            )
-            c2 = "உங்கள் சாலை உதவி மற்றும் கோரிக்கை விவரங்கள் இரண்டும் உறுதி செய்யப்பட்டுவிட்டன."
-            if dispatch and dispatch.get("eta_mins"):
-                c2 += f" உதவி சுமார் {dispatch['eta_mins']} நிமிடங்களில் வரும். கவலைப்படாதீர்கள், பாதுகாப்பாக இருங்கள்."
-            elif draft and draft.get("estimated_range_display_ta"):
-                c2 += f" மதிப்பீட்டு பழுது செலவு {draft['estimated_range_display_ta']} — ஆய்வாளர் பரிசோதனைக்குப் பிறகு இறுதி ஒப்புதல் வழங்கப்படும்."
-            return f"{c1} {c2}"
-        c1 = ("Confirm ho gaya ji — aapka insurance claim APPLY ho gaya aur roadside "
-              "help DISPATCH ho gaya hai.")
-        c2 = "Aapka RSA ticket aur FNOL claim card dono lock ho chuke hain."
+        lang = _normalize_lang_code(language) or "hi-IN"
+        b = get_lang_bundle(lang)
+        c1 = b["close_c1"]
+        c2 = b["close_c2"]
         if dispatch and dispatch.get("eta_mins"):
-            c2 += f" Help lagbhag {dispatch['eta_mins']} minute mein aayegi. Aap chinta mat kijiye, safe rahiye ji."
-        elif draft and draft.get("estimated_range_display"):
-            c2 += f" Estimated repair {draft['estimated_range_display']} — final approval surveyor inspection ke baad hoga."
+            c2 += b["close_eta"].format(eta=dispatch["eta_mins"])
+        elif draft and draft.get("estimated_repair_high_inr"):
+            est = format_range(draft["estimated_repair_low_inr"], draft["estimated_repair_high_inr"], lang)
+            c2 += b["close_est"].format(est=est)
         return f"{c1} {c2}"
 
 
