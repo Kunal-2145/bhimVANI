@@ -6,9 +6,9 @@ Wraps the LIVE Gnani.ai APIs with production guardrails:
   * STT  (Prisma):   POST https://api.vachana.ai/stt/v3
   * TTS  (Timbre):   POST https://api.vachana.ai/api/v1/tts/inference
   * Header X-API-Key-ID: <GNANI_API_KEY> on every call.
-  * G2 GUARDRAIL: a single asyncio.Semaphore(1) around ALL live calls —
+  * G2 GUARDRAIL: a per-event-loop asyncio.Semaphore(1) around ALL live calls —
     student keys allow strictly 1 request at a time. Auto-retries on
-    HTTP 429 / 5xx with exponential backoff + jitter.
+    HTTP 429 / 5xx with exponential backoff + jitter; fails fast on 401/403/4xx.
   * Credit-Shield Fallback Mode: with no GNANI_API_KEY the app NEVER
     crashes — STT returns a deterministic pass-through and TTS synthesizes
     a locally generated 24kHz spoken-tone WAV (0 credits consumed).
@@ -16,23 +16,30 @@ Wraps the LIVE Gnani.ai APIs with production guardrails:
     magic), it is framed as 16-bit mono 24kHz WAV so browser
     AudioContext.decodeAudioData never fails.
   * MD5 disk cache (backend/cache/tts/): every synthesized clause is cached
-    as md5(text|voice|model|lang).wav so demo re-runs cost 0 credits.
-  * Optionally uses the `gnani-vachana` SDK if installed (REST path is the
-    default; SDK import failures are non-fatal).
+    as md5(tts-v2|live|text|voice|model|lang).wav so demo re-runs cost 0 credits.
 """
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import os
 import random
 import struct
 import time
+import weakref
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import httpx
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
 
 try:  # optional SDK (non-fatal if absent)
     from gnani import stt as _gnani_stt_sdk  # type: ignore
@@ -60,10 +67,10 @@ DEFAULT_KEYTERMS = (
 )
 STT_FORMATS = {"codemix", "transcribe"}
 STT_LANGS = {"hi-IN", "indic-auto", "en-IN", "mr-IN", "ta-IN", "te-IN"}
+RETRYABLE_STATUS = {408, 429, 500, 502, 503, 504}
 
-_SEMAPHORE: Optional[asyncio.Semaphore] = None      # live-call gate
-_LOCK = asyncio.Lock()                              # config hot-reload lock
-
+_LOOP_SEMS: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore]" = weakref.WeakKeyDictionary()
+_LOOP_CLIENTS: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, tuple[int, httpx.AsyncClient]]" = weakref.WeakKeyDictionary()
 _CACHE_DIR = Path(os.path.dirname(os.path.abspath(__file__))) / "cache" / "tts"
 
 
@@ -92,7 +99,7 @@ def _load_config() -> GnaniConfig:
     tts_model = os.environ.get("GNANI_TTS_MODEL", DEFAULT_TTS_MODEL)
     return GnaniConfig(
         api_key=key,
-        base_url=os.environ.get("GNANI_BASE_URL", DEFAULT_BASE_URL),
+        base_url=os.environ.get("GNANI_BASE_URL", DEFAULT_BASE_URL).rstrip("/"),
         stt_model=stt_model if stt_model in ALLOWED_STT_MODELS else DEFAULT_STT_MODEL,
         stt_language=stt_lang if stt_lang in STT_LANGS else DEFAULT_LANGUAGE,
         stt_format=stt_format if stt_format in STT_FORMATS else "codemix",
@@ -105,12 +112,39 @@ def _load_config() -> GnaniConfig:
 CONFIG: GnaniConfig = _load_config()
 
 
+def reload_config() -> GnaniConfig:
+    global CONFIG
+    CONFIG = _load_config()
+    return CONFIG
+
+
 def _sem() -> asyncio.Semaphore:
-    """G2 guardrail: ONE global semaphore -> student API = 1 live request."""
-    global _SEMAPHORE
-    if _SEMAPHORE is None:
-        _SEMAPHORE = asyncio.Semaphore(1)
-    return _SEMAPHORE
+    """G2 guardrail: ONE semaphore(1) per running event loop -> student API = 1 live request."""
+    loop = asyncio.get_running_loop()
+    sem = _LOOP_SEMS.get(loop)
+    if sem is None:
+        sem = asyncio.Semaphore(1)
+        _LOOP_SEMS[loop] = sem
+    return sem
+
+
+async def _get_http_client() -> tuple[httpx.AsyncClient, bool]:
+    """Return a pooled AsyncClient per running loop (or transient if AsyncClient is mocked)."""
+    cls_id = id(httpx.AsyncClient)
+    # If httpx.AsyncClient was monkeypatched in tests, construct directly as context-managed
+    if cls_id != id(getattr(httpx, "_orig_async_client", httpx.AsyncClient)):
+        return httpx.AsyncClient(timeout=CONFIG.timeout_s), True
+    loop = asyncio.get_running_loop()
+    entry = _LOOP_CLIENTS.get(loop)
+    if entry is not None and entry[0] == cls_id and not getattr(entry[1], "is_closed", False):
+        return entry[1], False
+    client = httpx.AsyncClient(timeout=CONFIG.timeout_s)
+    _LOOP_CLIENTS[loop] = (cls_id, client)
+    return client, False
+
+
+if not hasattr(httpx, "_orig_async_client"):
+    setattr(httpx, "_orig_async_client", httpx.AsyncClient)
 
 
 def set_api_key(key: str) -> bool:
@@ -156,16 +190,51 @@ def make_wav_header(num_samples: int, sample_rate: int = 24000,
 def wrap_pcm_as_wav(pcm: bytes, sample_rate: int = 24000,
                     channels: int = 1, bits_per_sample: int = 16) -> bytes:
     """If bytes are NOT already RIFF/WAVE, frame raw PCM into a WAV blob."""
-    if pcm[:3] == b"RIF" or pcm.startswith(b"RIFF"):
+    if not pcm:
+        return b""
+    if len(pcm) >= 12 and pcm[:4] == b"RIFF" and pcm[8:12] == b"WAVE":
         return pcm
-    # Estimate safe intake: trust config sample rate for raw PCM chunk sizes.
-    header = make_wav_header(len(pcm) // (channels * (bits_per_sample // 8)),
+    bytes_per_sample = channels * (bits_per_sample // 8)
+    header = make_wav_header(len(pcm) // max(1, bytes_per_sample),
                              sample_rate, channels, bits_per_sample)
     return header + pcm
 
 
 def is_valid_wav(audio: bytes) -> bool:
-    return bool(audio) and audio[:4] == b"RIFF" and audio[8:12] == b"WAVE"
+    return bool(audio) and len(audio) > 44 and audio[:4] == b"RIFF" and audio[8:12] == b"WAVE"
+
+
+def resample_wav_to_16k(wav_bytes: bytes) -> bytes:
+    """Downsample mono 16-bit PCM WAV (e.g. 24kHz Timbre) to 16kHz for Prisma STT."""
+    if not is_valid_wav(wav_bytes):
+        return wav_bytes
+    try:
+        src_rate = struct.unpack_from("<I", wav_bytes, 24)[0]
+        channels = struct.unpack_from("<H", wav_bytes, 22)[0]
+        bits = struct.unpack_from("<H", wav_bytes, 34)[0]
+        if src_rate == 16000 and channels == 1 and bits == 16:
+            return wav_bytes
+        if channels != 1 or bits != 16 or src_rate <= 0:
+            return wav_bytes
+        pcm = wav_bytes[44:]
+        n_in = len(pcm) // 2
+        if n_in < 2:
+            return wav_bytes
+        samples = struct.unpack(f"<{n_in}h", pcm[:n_in * 2])
+        ratio = src_rate / 16000.0
+        n_out = max(1, int(n_in / ratio))
+        out_samples = []
+        for i in range(n_out):
+            pos = i * ratio
+            i0 = min(n_in - 1, int(pos))
+            i1 = min(n_in - 1, i0 + 1)
+            frac = pos - i0
+            val = int(samples[i0] * (1.0 - frac) + samples[i1] * frac)
+            out_samples.append(max(-32768, min(32767, val)))
+        out_pcm = struct.pack(f"<{len(out_samples)}h", *out_samples)
+        return make_wav_header(len(out_samples), sample_rate=16000) + out_pcm
+    except Exception:
+        return wav_bytes
 
 
 # ---------------------------------------------------------------------------
@@ -173,9 +242,6 @@ def is_valid_wav(audio: bytes) -> bool:
 # ---------------------------------------------------------------------------
 
 def cache_key(text: str, voice: str, model: str, language: str) -> str:
-    """MD5 disk-cache key. Includes a schema tag + the LIVE/FALLBACK mode so a
-    fallback tone can NEVER be served in place of real Timbre speech (that bug
-    made the agent 'beep' and Prisma transcribe silence)."""
     mode = "live" if live_mode() else "fallback"
     return hashlib.md5(
         f"tts-v2|{mode}|{text}|{voice}|{model}|{language}".encode("utf-8")
@@ -217,18 +283,13 @@ async def transcribe_wav(
     preferred_language: str = "hi-IN",
     keyterms: str = DEFAULT_KEYTERMS,
 ) -> Dict[str, Any]:
-    """POST /stt/v3 — genuine 16kHz mono 16-bit PCM WAV -> Hinglish transcript.
-
-    Returns {"transcript", "request_id", "stt_latency_ms", "model",
-             "language_code", "fallback", "score"}. Retries 429/5xx.
-    """
+    """POST /stt/v3 — 16kHz mono 16-bit PCM WAV -> Hinglish transcript."""
     m = model or CONFIG.stt_model
     lang = language_code or CONFIG.stt_language
     fmt = audio_format or CONFIG.stt_format
     started = time.perf_counter()
 
     if not live_mode():
-        # ----- Credit-Shield Fallback (0 credits, zero crash) -----
         return {
             "transcript": _fallback_transcript_hint(wav_bytes),
             "request_id": "fallback-" + hashlib.md5(wav_bytes or b"empty").hexdigest()[:8],
@@ -240,7 +301,6 @@ async def transcribe_wav(
         }
 
     url = f"{CONFIG.base_url}/stt/v3"
-    files = {"audio_file": ("call_turn.wav", wav_bytes, "audio/wav")}
     data = {
         "model": m,
         "language_code": lang,
@@ -252,23 +312,36 @@ async def transcribe_wav(
 
     last_err: str = ""
     for attempt in range(1, CONFIG.max_retries + 1):
+        files = {"audio_file": ("call_turn.wav", wav_bytes, "audio/wav")}
         try:
-            async with _sem():               # G2: one request at a time
-                async with httpx.AsyncClient(timeout=CONFIG.timeout_s) as client:
+            client, transient = await _get_http_client()
+            try:
+                async with _sem():
                     resp = await client.post(url, headers=headers, files=files, data=data)
-            if resp.status_code in (429, 500, 502, 503, 504):
+            finally:
+                if transient:
+                    await client.aclose()
+
+            if resp.status_code in RETRYABLE_STATUS:
                 last_err = f"HTTP {resp.status_code}"
                 await asyncio.sleep(min(2.0, 0.35 * attempt) * (1 + random.random() * 0.4))
                 continue
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                last_err = f"HTTP {resp.status_code}"
+                break
+
             payload = _json_or_bow(resp)
             latency = round((time.perf_counter() - started) * 1000, 1)
             CONFIG.telemetry["last_stt_latency_ms"] = latency
-            transcript = str(payload.get("transcript") or payload.get("display") or
-                             payload.get("text") or payload.get("Transcript") or "")
+            nested = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+            transcript = str(
+                payload.get("transcript") or payload.get("display")
+                or payload.get("text") or payload.get("Transcript")
+                or nested.get("transcript") or nested.get("text") or ""
+            )
             return {
                 "transcript": transcript.strip(),
-                "request_id": str(payload.get("request_id") or payload.get("id") or ""),
+                "request_id": str(payload.get("request_id") or payload.get("id") or nested.get("request_id") or ""),
                 "stt_latency_ms": latency,
                 "model": m,
                 "language_code": lang,
@@ -276,7 +349,7 @@ async def transcribe_wav(
                 "fallback": False,
                 "score": payload.get("Confidence") or payload.get("confidence"),
             }
-        except Exception as exc:  # network/parse error counts as a retryable failure
+        except Exception as exc:
             last_err = str(exc)
             await asyncio.sleep(min(2.0, 0.35 * attempt))
     return {
@@ -292,8 +365,6 @@ async def transcribe_wav(
 
 
 def _fallback_transcript_hint(wav_bytes: bytes) -> str:
-    """Deterministic fallback: the frontend sends the driver's typed/scripted
-    line; when STT is unavailable the brain proceeds from provided text."""
     return ""
 
 
@@ -322,11 +393,7 @@ async def synthesize_speech(
     sample_rate: int = 24000,
     use_cache: bool = True,
 ) -> Dict[str, Any]:
-    """POST /api/v1/tts/inference -> {"audio_b64" not used; we return bytes}.
-
-    Returns {"audio": wav_bytes, "cached": bool, "tts_latency_ms", "model",
-             "voice", "fallback", "chars", "credit_shield"}.
-    """
+    """POST /api/v1/tts/inference -> RIFF/WAV bytes + latency telemetry."""
     started = time.perf_counter()
     v = voice or CONFIG.tts_voice
     mdl = model or CONFIG.tts_model
@@ -339,11 +406,10 @@ async def synthesize_speech(
             return {"audio": hit, "cached": True,
                     "tts_latency_ms": round((time.perf_counter() - started) * 1000, 1),
                     "model": mdl, "voice": v, "fallback": False,
-                    "chars": len(text), "credit_shield": live_mode()}
+                    "chars": len(text), "credit_shield": True}
 
     if not live_mode():
         wav = fallback_tts_wav(text, sample_rate=sample_rate)
-        # NEVER cache fallback tones: a tone must not be served as Timbre speech
         return {"audio": wav, "cached": False,
                 "tts_latency_ms": round((time.perf_counter() - started) * 1000, 1),
                 "model": mdl + " (fallback voice-tone)",
@@ -370,27 +436,37 @@ async def synthesize_speech(
     last_err = ""
     for attempt in range(1, CONFIG.max_retries + 1):
         try:
-            async with _sem():
-                async with httpx.AsyncClient(timeout=CONFIG.timeout_s) as client:
+            client, transient = await _get_http_client()
+            try:
+                async with _sem():
                     resp = await client.post(url, headers=headers, json=body)
-            if resp.status_code in (429, 500, 502, 503, 504):
+            finally:
+                if transient:
+                    await client.aclose()
+
+            if resp.status_code in RETRYABLE_STATUS:
                 last_err = f"HTTP {resp.status_code}"
                 await asyncio.sleep(min(2.0, 0.4 * attempt) * (1 + random.random() * 0.5))
                 continue
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                last_err = f"HTTP {resp.status_code}"
+                break
+
             audio = _extract_audio_bytes(resp)
             latency = round((time.perf_counter() - started) * 1000, 1)
             CONFIG.telemetry["last_tts_latency_ms"] = latency
-            wav = wrap_pcm_as_wav(audio, sample_rate=sample_rate)  # RIFF guard
+            wav = wrap_pcm_as_wav(audio, sample_rate=sample_rate)
             if is_valid_wav(wav):
                 _write_cache(ck, wav)
-            return {"audio": wav, "cached": False, "tts_latency_ms": latency,
-                    "model": mdl, "voice": v, "fallback": False,
-                    "chars": len(text), "credit_shield": True}
+                return {"audio": wav, "cached": False, "tts_latency_ms": latency,
+                        "model": mdl, "voice": v, "fallback": False,
+                        "chars": len(text), "credit_shield": True}
+            last_err = "empty_audio_payload"
+            break
         except Exception as exc:
             last_err = str(exc)
             await asyncio.sleep(min(2.0, 0.4 * attempt))
-    # graceful degradation (never crash the demo)
+
     wav = fallback_tts_wav(text, sample_rate=sample_rate)
     return {"audio": wav, "cached": False,
             "tts_latency_ms": round((time.perf_counter() - started) * 1000, 1),
@@ -405,12 +481,13 @@ def _extract_audio_bytes(resp: httpx.Response) -> bytes:
     if "audio" in ctype or "octet-stream" in ctype:
         return resp.content
     payload = _json_or_bow(resp)
-    import base64 as _b64
     for k in ("audio", "audio_b64", "audioBase64", "data", "audio_content"):
         raw = payload.get(k)
         if isinstance(raw, str) and raw:
+            if raw.startswith("data:") and "," in raw:
+                raw = raw.split(",", 1)[1]
             try:
-                return _b64.b64decode(raw, validate=False)
+                return base64.b64decode(raw, validate=False)
             except Exception:
                 continue
     return b""
@@ -422,8 +499,6 @@ def _extract_audio_bytes(resp: httpx.Response) -> bytes:
 
 def _fallback_tts_pcm(text: str, sample_rate: int = 24000,
                       base_freq_hz: float = 200.0) -> bytes:
-    """Deterministic spoken-tone contour: duration ~ chars*52ms so the demo
-    still hears cadence even with no credits. Pitched vowels feel like speech."""
     import math
     dur = max(0.45, min(6.0, len(text) * 0.052))
     n = int(dur * sample_rate)
@@ -442,19 +517,23 @@ def fallback_tts_wav(text: str, sample_rate: int = 24000) -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# 1-command live verification (TTS -> STT round-trip), used by UI + CLI
+# 1-command live verification (TTS -> 16kHz resample -> STT round-trip)
 # ---------------------------------------------------------------------------
 
 TEST_PHRASE = "Shukriya BimaVani, radiator damage hai, kripya gaadi start mat kijiye."
 
 
 async def verify_round_trip(phrase: str = TEST_PHRASE) -> Dict[str, Any]:
-    """Synthesize with Timbre v2.5, feed into Prisma v2.5, report metrics."""
+    """Synthesize with Timbre, resample to 16kHz, feed into Prisma, report metrics."""
     t0 = time.perf_counter()
     tts = await synthesize_speech(phrase, use_cache=True)
-    t1 = time.perf_counter()
-    stt = await transcribe_wav(tts["audio"])
+    stt_wav = resample_wav_to_16k(tts["audio"]) if tts.get("audio") else b""
+    stt = await transcribe_wav(stt_wav)
     t2 = time.perf_counter()
+    live_tx = (stt.get("transcript") or "").strip()
+    ratio = round(SequenceMatcher(None, phrase.lower(), live_tx.lower()).ratio(), 3) if live_tx else 0.0
+    fallback_used = bool(tts.get("fallback") or stt.get("fallback"))
+    verified = (not fallback_used) and bool(live_tx)
     return {
         "phrase": phrase,
         "tts_model": tts["model"],
@@ -465,19 +544,21 @@ async def verify_round_trip(phrase: str = TEST_PHRASE) -> Dict[str, Any]:
         "round_trip_ms": round((t2 - t0) * 1000, 1),
         "tts_bytes": len(tts["audio"]) if tts.get("audio") else 0,
         "request_id": stt.get("request_id", ""),
-        "live_transcript": stt.get("transcript", ""),
-        "fallback": bool(tts.get("fallback") or stt.get("fallback")),
+        "live_transcript": live_tx,
+        "match_ratio": ratio,
+        "verified": verified,
+        "fallback": fallback_used,
+        "error": stt.get("error") or tts.get("error"),
         "sdk_available": _SDK_AVAILABLE,
         "live_mode": live_mode(),
     }
 
 
 # ---------------------------------------------------------------------------
-# (Optional) SDK adapters — exposed for completeness per spec
+# (Optional) SDK adapters
 # ---------------------------------------------------------------------------
 
 def sdk_stt_client() -> Any:
-    """gnani.stt.GnaniSTTClient if the gnani-vachana SDK is installed."""
     if _SDK_AVAILABLE and _gnani_stt_sdk is not None:
         try:
             return _gnani_stt_sdk.GnaniSTTClient(api_key=CONFIG.api_key)
@@ -487,7 +568,6 @@ def sdk_stt_client() -> Any:
 
 
 def sdk_tts_client() -> Any:
-    """gnani.tts.GnaniTTSClient if the gnani-vachana SDK is installed."""
     if _SDK_AVAILABLE and _gnani_tts_sdk is not None:
         try:
             return _gnani_tts_sdk.GnaniTTSClient(api_key=CONFIG.api_key)

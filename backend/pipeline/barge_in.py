@@ -63,6 +63,8 @@ class TurnStateMachine:
 
     # -- transitions --------------------------------------------------------
     def transition(self, new_state: str) -> bool:
+        if new_state == self.state:
+            return True
         if new_state not in TRANSITIONS.get(self.state, set()):
             return False
         self.state = new_state
@@ -133,3 +135,11 @@ def get_state_machine(session_id: str = "default") -> TurnStateMachine:
     if session_id not in SESSION_STATE_MACHINES:
         SESSION_STATE_MACHINES[session_id] = TurnStateMachine(session_id)
     return SESSION_STATE_MACHINES[session_id]
+
+
+def reset_state_machine(session_id: str) -> None:
+    sm = SESSION_STATE_MACHINES.pop(session_id, None)
+    if sm is not None:
+        for task in list(sm._tasks):
+            if not task.done():
+                task.cancel()

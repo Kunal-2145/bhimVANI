@@ -66,10 +66,16 @@ def main() -> int:
     print(f"gnani-vachana SDK   : {'available' if result['sdk_available'] else 'not installed (REST path active)'}")
     print("-" * 72)
     if result["fallback"]:
+        if key:
+            print(f"❌ LIVE MODE FAILED — fell back ({result.get('error') or 'unknown error'}).")
+            return 1
         print("⚠️  FALLBACK MODE result — no live Gnani credits were used.")
         print("    The app itself remains fully functional (Credit-Shield).")
         return 0
-    match_ratio = _similarity(TEST_PHRASE, result["live_transcript"])
+    if not result.get("verified"):
+        print("❌ LIVE CALL RETURNED EMPTY TRANSCRIPT.")
+        return 1
+    match_ratio = result.get("match_ratio") or _similarity(TEST_PHRASE, result["live_transcript"])
     print(f"Transcript match    : {match_ratio:.0%} (Levenshtein ratio vs test phrase)")
     if match_ratio >= 0.6:
         print("✅ LIVE GNANI ECOSYSTEM VERIFIED — Prisma STT ⇄ Timbre TTS OK")

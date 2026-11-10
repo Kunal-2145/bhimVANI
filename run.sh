@@ -21,7 +21,7 @@ echo "[run.sh] Installing/upgrading dependencies..."
 "$PY" -m pip install --quiet -r requirements.txt
 
 mkdir -p backend/cache/tts
-touch backend/data/call_history.json
+[ -s backend/data/call_history.json ] || printf '[]\n' > backend/data/call_history.json
 
 MODE="${1:-}"
 case "$MODE" in

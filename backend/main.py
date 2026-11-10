@@ -1,33 +1,33 @@
 """
-BimaVani — FastAPI Application Server (backend/main.py)
-=======================================================
+BimaVani — FastAPI + WebSocket Streaming Application Server (backend/main.py)
+=============================================================================
 Endpoints
-  GET  /api/health           — heartbeat + mode + pipeline telemetry
-  POST /api/config/key       — HOT-RELOAD GNANI_API_KEY (UI 🔑 modal;
-                               never restarts the server)
-  GET  /api/config           — current safe config (masked key, models)
-  POST /api/verify-gnani     — live Timbre→Prisma round-trip for the 🧪 button
-  POST /api/call/turn        — one driver voice turn: 16kHz WAV → STT →
-                               Brain tools → 2-clause reply (+ clause audio)
-  POST /api/call/barge-in    — <50ms flush: cancel tasks + clear queues,
-                               optional corrected transcript → updated cards
-  POST /api/tts              — Timbre synth with cache (jitter-buffer feeder)
-  POST /api/eval             — run the 20-case benchmark suite
-  GET  /api/pipeline-state   — queue depths, barge-in latency, stage timings
+  GET  /api/health              — heartbeat + mode + active sessions + pipeline telemetry
+  POST /api/config/key          — hot-reload GNANI_API_KEY without restart
+  GET  /api/config              — safe config (masked key, models)
+  POST /api/verify-gnani        — live Timbre→Prisma round-trip verification
+  POST /api/call/start          — dial greeting (2 clauses + WAV audio)
+  POST /api/call/turn           — one driver turn: WAV → STT → Endpointing → Brain → Clauses → TTS
+  POST /api/call/barge-in       — <50ms flush + [interrupted] context dump + optional card update
+  POST /api/call/end            — hang up & clear per-call memory + session pipeline
+  POST /api/tts                 — Timbre synth with MD5 cache
+  POST /api/eval                — run the 20-case benchmark suite
+  GET  /api/pipeline-state      — active sessions, queue depths, jitter buffers, barge-in latency
+  WS   /ws/call/{call_id}       — real-time 20ms PCM audio streaming + Input/Output Jitter Buffers + streaming TTS clauses
 Static: serves frontend/ at "/"
 """
 from __future__ import annotations
 
 import asyncio
 import base64
-import json
 import os
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -35,48 +35,112 @@ from pydantic import BaseModel, Field
 
 load_dotenv()
 
+from backend import eval_runner
 from backend.gnani_client import (
     CONFIG,
     fallback_tts_wav,
-    has_api_key,
     is_valid_wav,
     live_mode,
     set_api_key,
     synthesize_speech,
     transcribe_wav,
     verify_round_trip,
+    wrap_pcm_as_wav,
 )
-from backend.pipeline.barge_in import get_state_machine
-from backend.pipeline.brain import Brain, llm_status
+from backend.pipeline.barge_in import (
+    SESSION_STATE_MACHINES,
+    get_state_machine,
+    reset_state_machine,
+)
+from backend.pipeline.brain import Brain, llm_status, llm_warmup
 from backend.pipeline.clause_buffer import split_into_clauses
-from backend.pipeline.queues import BUS
-from backend import eval_runner
+from backend.pipeline.endpointing import EndpointingState, analyze_wav_endpoint, endpoint_turn
+from backend.pipeline.queues import BUS, REGISTRY, SessionPipeline
 
 APP_ROOT = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = APP_ROOT / "frontend"
 
-app = FastAPI(title="BimaVani (बीमा-वाणी) — Voice-First RSA + IRDAI Claim Desk",
-              version="1.0.0")
+BRAIN = Brain()
+
+# Latest per-stage timings (floats only, ms) mirrored for global /api/health view
+STAGE_TELEMETRY: Dict[str, float] = {f"stage_{i}": 0.0 for i in range(1, 9)}
+
+
+def _stage_names() -> List[str]:
+    brain_lbl = "Brain (LLM + Tools)" if llm_status().get("active") else "Brain (Rules + Tools)"
+    return [
+        "Mic (20ms + In-Jitter)",
+        f"{CONFIG.stt_model} STT",
+        "Auto-VAD Endpoint",
+        brain_lbl,
+        "Clause Buffer",
+        f"{CONFIG.tts_model} TTS",
+        "Out Jitter Buffer",
+        "Speaker / Barge-In",
+    ]
+
+
+def _stages_snapshot(sess: Optional[SessionPipeline] = None) -> Dict[str, float]:
+    src = sess.stages_ms if sess is not None else STAGE_TELEMETRY
+    return {f"stage_{i}": round(float(src.get(f"stage_{i}", 0.0)), 2) for i in range(1, 9)}
+
+
+def _sync_global_stage(stage_key: str, ms: float, sess: Optional[SessionPipeline] = None) -> None:
+    STAGE_TELEMETRY[stage_key] = ms
+    if sess is not None:
+        sess.stages_ms[stage_key] = ms
+
+
+async def _synthesize_one_clause(c: Dict[str, Any], sess: Optional[SessionPipeline] = None) -> Dict[str, Any]:
+    t0 = time.perf_counter()
+    synth = await synthesize_speech(c["text"], use_cache=True)
+    dt = (time.perf_counter() - t0) * 1000.0
+    wav = synth["audio"] if is_valid_wav(synth.get("audio", b"")) else fallback_tts_wav(c["text"])
+    if sess is not None:
+        sess.output_jitter.push(c["index"], wav)
+        sess.output_jitter.pop_ready()
+    return {
+        "index": c["index"],
+        "priority": c["priority"],
+        "text": c["text"],
+        "audio_base64": "data:audio/wav;base64," + base64.b64encode(wav).decode("ascii"),
+        "latency_ms": round(dt, 1),
+        "cached": bool(synth.get("cached", False)),
+        "fallback": bool(synth.get("fallback", False)),
+    }
+
+
+async def _synthesize_clauses(
+    clauses: List[Dict[str, Any]],
+    sess: Optional[SessionPipeline] = None,
+) -> tuple[List[Dict[str, Any]], float]:
+    """Synthesize up to 2 clauses through Timbre + fallback guard; return payloads and total TTS ms."""
+    payloads: List[Dict[str, Any]] = []
+    tts_total_ms = 0.0
+    for c in clauses:
+        cp = await _synthesize_one_clause(c, sess=sess)
+        tts_total_ms += float(cp["latency_ms"])
+        payloads.append(cp)
+    return payloads, tts_total_ms
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    task = asyncio.create_task(llm_warmup())
+    yield
+    if not task.done():
+        task.cancel()
+
+
+app = FastAPI(
+    title="BimaVani (बीमा-वाणी) — Scalable Streaming Voice RSA + IRDAI Claim Desk",
+    version="1.1.0",
+    lifespan=_lifespan,
+)
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
 )
 
-BRAIN = Brain()
-
-
-@app.on_event("startup")
-async def _warm_llm() -> None:
-    """Probe the .env LLM once at boot (background, no tokens) so a dead
-    provider never adds seconds to the first live turn of a demo."""
-    import asyncio as _asyncio
-    from backend.pipeline.brain import llm_warmup
-    _asyncio.create_task(llm_warmup())
-
-# live stage timings for the 8-box visualizer
-STAGE_TELEMETRY: Dict[str, float] = {f"stage_{i}": 0.0 for i in range(1, 9)}
-STAGE_TELEMETRY.update({"stage_names": [
-    "Mic", "Prisma v3.0 STT", "Auto-VAD Endpoint", "Brain (DeepSeek + Tools)",
-    "Clause Buffer", "Timbre v2.5 TTS", "Jitter Buffer", "Speaker / Barge-In"]})
 
 class KeyIn(BaseModel):
     api_key: str = Field(min_length=0, max_length=256)
@@ -88,15 +152,19 @@ class StartIn(BaseModel):
 
 class TurnIn(BaseModel):
     call_id: str = "live"
-    wav_b64: str = ""                       # genuine 16kHz mono PCM WAV (stage 1)
-    transcript_override: str = ""           # scripted demo push (no STT credits)
-    endpoint_mode: str = "auto_vad"         # auto_vad (default now) | push_to_talk
+    wav_b64: str = ""
+    transcript_override: str = ""
+    endpoint_mode: str = "auto_vad"         # auto_vad | push_to_talk
     vad_silence_ms: int = 600
 
 
 class BargeInIn(BaseModel):
     call_id: str = "live"
-    transcript: str = ""                    # e.g. "Ruko! policy 4491 hai!"
+    transcript: str = ""
+    spoken_text: str = ""
+    wav_b64: str = ""
+    pcm_b64: str = ""
+    source: str = "driver_button"
     update_cards: bool = True
 
 
@@ -119,6 +187,7 @@ class EndIn(BaseModel):
 
 @app.get("/api/health")
 async def health() -> Dict[str, Any]:
+    latest = max(REGISTRY.sessions.values(), key=lambda s: s.last_active_at) if REGISTRY.sessions else None
     return {
         "ok": True,
         "service": "BimaVani",
@@ -126,16 +195,22 @@ async def health() -> Dict[str, Any]:
         "stt_model": CONFIG.stt_model,
         "tts_model": CONFIG.tts_model,
         "gnani_base_url": CONFIG.base_url,
-        "queues": BUS.snapshot(),
-        "stages": {k: round(v, 1) for k, v in STAGE_TELEMETRY.items() if k != "stage_names"},
-        "stage_names": STAGE_TELEMETRY["stage_names"],
+        "ws_endpoint": "/ws/call/{call_id}",
+        "sessions": REGISTRY.snapshot(),
+        "queues": latest.bus.snapshot() if latest else BUS.snapshot(),
+        "stages": _stages_snapshot(latest),
+        "stage_names": _stage_names(),
         "brain": llm_status(),
     }
 
 
 @app.get("/api/config")
 async def config() -> Dict[str, Any]:
-    masked = (CONFIG.api_key[:4] + "…" + CONFIG.api_key[-4:]) if len(CONFIG.api_key) > 10 else ("set" if CONFIG.api_key else "")
+    masked = (
+        (CONFIG.api_key[:4] + "…" + CONFIG.api_key[-4:])
+        if len(CONFIG.api_key) > 10
+        else ("set" if CONFIG.api_key else "")
+    )
     return {
         "live_mode": live_mode(),
         "api_key_masked": masked,
@@ -144,17 +219,24 @@ async def config() -> Dict[str, Any]:
         "stt_format": CONFIG.stt_format,
         "tts_model": CONFIG.tts_model,
         "tts_voice": CONFIG.tts_voice,
+        "tts_language": CONFIG.tts_language,
+        "gnani_base_url": CONFIG.base_url,
         "llm_model": os.environ.get("BIMAVANI_LLM_MODEL", "gnani/gnani-evon-v3.3-30B-A3B"),
         "llm_enabled": bool(os.environ.get("LLM_API_KEY")),
         "semaphore_limit": 1,
+        "max_concurrent_sessions": REGISTRY.max_sessions,
     }
 
 
 @app.post("/api/config/key")
 async def hot_set_key(payload: KeyIn) -> Dict[str, Any]:
-    """🔑 UI modal: hot-reload GNANI_API_KEY without a server restart."""
+    """Hot-reload GNANI_API_KEY without restarting the server."""
     ok = set_api_key(payload.api_key)
-    masked = (CONFIG.api_key[:4] + "…" + CONFIG.api_key[-4:]) if len(CONFIG.api_key) > 10 else ("set" if CONFIG.api_key else "")
+    masked = (
+        (CONFIG.api_key[:4] + "…" + CONFIG.api_key[-4:])
+        if len(CONFIG.api_key) > 10
+        else ("set" if CONFIG.api_key else "")
+    )
     return {
         "saved_from_live_config": ok,
         "live_mode": live_mode(),
@@ -164,56 +246,64 @@ async def hot_set_key(payload: KeyIn) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# 🧪 Live Gnani verification (UI button + CLI share this path)
+# Live Gnani verification (UI button + CLI share this path)
 # ---------------------------------------------------------------------------
 
 @app.post("/api/verify-gnani")
 async def verify_gnani() -> Dict[str, Any]:
     result = await verify_round_trip()
-    result["ui_hint"] = (
-        "Live OK — Prisma transcript matched synthesized speech."
-        if not result["fallback"] else
-        "Credit-Shield fallback used (no GNANI_API_KEY). Set the key for live calls."
-    )
+    if result.get("verified"):
+        hint = f"Live OK — Prisma transcribed speech ({int(result['match_ratio'] * 100)}% match)."
+    elif not result.get("fallback"):
+        hint = (
+            "Live endpoint reached, but Prisma returned an empty transcript"
+            + (f" ({result['error']})" if result.get("error") else ".")
+        )
+    else:
+        hint = (
+            f"Fallback mode ({result['error']})"
+            if result.get("error") and live_mode()
+            else "Credit-Shield fallback used (no GNANI_API_KEY). Set the key for live calls."
+        )
+    result["ui_hint"] = hint
     return result
 
 
 # ---------------------------------------------------------------------------
-# [0] Call start — greeting through Clause Buffer -> Timbre -> Jitter Buffer
+# [0] Call start — greeting through Clause Buffer -> Timbre -> Out Jitter Buffer
 # ---------------------------------------------------------------------------
 
 @app.post("/api/call/start")
 async def call_start(payload: StartIn) -> Dict[str, Any]:
-    """📞 Dial: builds the call session and speaks the opening operator
-    greeting IMMEDIATELY (2 clauses streamed back for the Jitter Buffer)."""
     t0 = time.perf_counter()
     call_id = payload.call_id or "live"
-    # Wipe any memory left over from a previous call so this one starts fresh:
-    # no old policy number, parts, road type, stage or ticket status bleeds
-    # into the new greeting / turn.
     BRAIN.reset_call(call_id)
+    REGISTRY.remove(call_id)
+    sess = REGISTRY.get_or_create(call_id)
     sm = get_state_machine(call_id)
+    if sm.state != "IDLE":
+        sm.transition("IDLE")
     sm.transition("LISTENING")
+    sm.transition("THINKING")
 
+    t4 = time.perf_counter()
     started = await BRAIN.start_call(call_id)
-    clause_payloads = []
-    for c in started["clauses"]:
-        t6 = time.perf_counter()
-        synth = await synthesize_speech(c["text"], use_cache=True)
-        dt = (time.perf_counter() - t6) * 1000
-        STAGE_TELEMETRY["stage_6"] = STAGE_TELEMETRY.get("stage_6", 0) * 0.3 + dt * 0.7
-        await BUS.hops["tts"].put(len(synth["audio"]))
-        wav = synth["audio"] if is_valid_wav(synth["audio"]) else fallback_tts_wav(c["text"])
-        clause_payloads.append({
-            "index": c["index"], "priority": c["priority"],
-            "text": c["text"],
-            "audio_base64": "data:audio/wav;base64,"
-                            + base64.b64encode(wav).decode("ascii"),
-            "latency_ms": round(dt, 1),
-            "cached": synth.get("cached", False),
-            "fallback": synth.get("fallback", False),
-        })
-    await BUS.hops["clause_buffer"].put(len(clause_payloads))
+    _sync_global_stage("stage_4", (time.perf_counter() - t4) * 1000.0, sess)
+    sess.active_agent_reply = started["reply_text"]
+
+    await sess.bus.hops["clause_buffer"].put(len(started["clauses"]))
+    clause_payloads, tts_ms = await _synthesize_clauses(started["clauses"], sess=sess)
+    sess.bus.hops["clause_buffer"].get_nowait()
+    await sess.bus.hops["tts"].put(len(clause_payloads))
+    _sync_global_stage("stage_6", tts_ms, sess)
+
+    t7 = time.perf_counter()
+    sess.bus.hops["tts"].get_nowait()
+    await sess.bus.hops["jitter_buffer"].put(len(clause_payloads))
+    sess.bus.hops["jitter_buffer"].get_nowait()
+    _sync_global_stage("stage_7", (time.perf_counter() - t7) * 1000.0, sess)
+
+    sm.transition("SPEAKING")
 
     return {
         "ok": True,
@@ -222,209 +312,649 @@ async def call_start(payload: StartIn) -> Dict[str, Any]:
         "stage": started["memory"]["stage"],
         "ticket_status": started.get("ticket_status"),
         "clauses": clause_payloads,
-        "speech_fallback_hint": "app.js falls back to window.speechSynthesis if decodeAudioData fails.",
-        "pipeline": {"stages_ms": dict(STAGE_TELEMETRY), "queues": BUS.snapshot()},
+        "speech_fallback_hint": "app.js falls back to window.speechSynthesis if fallback tone is active.",
+        "pipeline": {
+            "stages_ms": _stages_snapshot(sess),
+            "queues": sess.bus.snapshot(),
+            "input_jitter": sess.input_jitter.snapshot(),
+            "output_jitter": sess.output_jitter.snapshot(),
+        },
         "total_start_ms": round((time.perf_counter() - t0) * 1000, 1),
     }
 
 
 # ---------------------------------------------------------------------------
-# [1] Mic → [2] Prisma STT → [3] Endpointing → [4] Brain → [5] clauses
+# [1] Mic → [2] Prisma STT → [3] Endpointing → [4] Brain → [5] Clauses → [6] TTS
 # ---------------------------------------------------------------------------
 
-@app.post("/api/call/turn")
-async def call_turn(payload: TurnIn) -> Dict[str, Any]:
+def _decode_b64(raw: str) -> bytes:
+    if not raw:
+        return b""
+    if raw.startswith("data:") and "," in raw:
+        raw = raw.split(",", 1)[1]
+    try:
+        return base64.b64decode(raw)
+    except Exception:
+        return b""
+
+
+async def _run_turn_core(
+    call_id: str,
+    sess: SessionPipeline,
+    sm: Any,
+    wav_bytes: bytes = b"",
+    transcript_override: str = "",
+    endpoint_mode: str = "auto_vad",
+    vad_silence_ms: int = 600,
+) -> Dict[str, Any]:
     t_stage1 = time.perf_counter()
-    call_id = payload.call_id or "live"
-    sm = get_state_machine(call_id)
-    sm.transition("LISTENING")
 
-    wav_bytes = b""
-    if payload.wav_b64:
-        try:
-            wav_bytes = base64.b64decode(payload.wav_b64)
-        except Exception:
-            wav_bytes = b""
-        if wav_bytes and wav_bytes[:1] not in (b"R",):
-            wav_bytes = wav_bytes  # browsers always send RIFF; tolerate quirks
-    await BUS.hops["mic_ingest"].put(len(wav_bytes))
+    # [1] Mic ingest (+ feed through InputJitterBuffer when raw WAV PCM present)
+    _sync_global_stage("stage_1", (time.perf_counter() - t_stage1) * 1000.0, sess)
+    await sess.bus.hops["mic_ingest"].put(len(wav_bytes))
 
-    # [3] endpointing telemetry (push-to-talk is the default; VAD optional)
-    from backend.pipeline.endpointing import endpoint_turn, EndpointingState
-    ep_state = EndpointingState(mode=payload.endpoint_mode or "push_to_talk",
-                                vad_silence_ms=payload.vad_silence_ms or 600)
-    ep = endpoint_turn(ep_state)
-    STAGE_TELEMETRY["stage_3"] = ep.get("endpoint_reason") == "push_to_talk_release" and 0.0 or 0.0
-    await BUS.hops["endpointing"].put(1)
+    # [3] Endpointing analysis (on raw WAV frames if audio was sent)
+    ep_mode = endpoint_mode if endpoint_mode in ("auto_vad", "push_to_talk") else "auto_vad"
+    sess.endpoint_state.configure(mode=ep_mode, vad_silence_ms=vad_silence_ms or 600)
+    if wav_bytes and len(wav_bytes) > 44:
+        ep = analyze_wav_endpoint(wav_bytes, sess.endpoint_state)
+    else:
+        t3 = time.perf_counter()
+        ep = endpoint_turn(sess.endpoint_state)
+        ep["latency_ms"] = round((time.perf_counter() - t3) * 1000, 2)
+    _sync_global_stage("stage_3", float(ep.get("latency_ms") or 0.0), sess)
+    sess.bus.hops["mic_ingest"].get_nowait()
+    await sess.bus.hops["endpointing"].put(1)
 
     # [2] Prisma STT (or scripted override -> 0 ms / 0 credits)
-    t2 = time.perf_counter()
-    if payload.transcript_override:
-        transcript = payload.transcript_override.strip()
+    if transcript_override:
+        transcript = transcript_override.strip()
         stt_meta: Dict[str, Any] = {
-            "transcript": transcript, "request_id": "scripted-" + call_id,
-            "stt_latency_ms": 0.0, "fallback": False, "skip_reason":
-            "scripted_demo_transcript (0 credits)",
+            "transcript": transcript,
+            "request_id": "scripted-" + call_id,
+            "stt_latency_ms": 0.0,
+            "fallback": False,
+            "skip_reason": "scripted_demo_transcript (0 credits)",
         }
     elif wav_bytes and len(wav_bytes) > 44:
         stt_meta = await transcribe_wav(wav_bytes)
     else:
-        stt_meta = {"transcript": "", "request_id": "empty",
-                    "stt_latency_ms": 0.0, "fallback": True}
-    STAGE_TELEMETRY["stage_2"] = float(stt_meta.get("stt_latency_ms") or 0.0)
-    await BUS.hops["stt"].put(stt_meta.get("transcript", ""))
+        stt_meta = {"transcript": "", "request_id": "empty", "stt_latency_ms": 0.0, "fallback": True}
+    _sync_global_stage("stage_2", float(stt_meta.get("stt_latency_ms") or 0.0), sess)
+    sess.bus.hops["endpointing"].get_nowait()
+    await sess.bus.hops["stt"].put(stt_meta.get("transcript", ""))
     transcript = stt_meta.get("transcript", "")
 
-    # [4] Brain (deterministic tools + memory; optional LLM assist)
     if not transcript:
-        return await _empty_turn(call_id, stt_meta, ep)
+        sess.bus.hops["stt"].get_nowait()
+        return await _empty_turn(call_id, sess, stt_meta, ep, sm)
+
+    # [4] Brain (deterministic tools + memory; optional LLM assist)
+    sm.transition("THINKING")
     t4 = time.perf_counter()
     result = await BRAIN.process_turn(call_id, transcript, stt_meta)
-    STAGE_TELEMETRY["stage_4"] = (time.perf_counter() - t4) * 1000
-    await BUS.hops["brain"].put(len(result["clauses"]))
+    _sync_global_stage("stage_4", (time.perf_counter() - t4) * 1000.0, sess)
+    sess.active_agent_reply = result.get("reply_text", "")
+    sess.bus.hops["stt"].get_nowait()
+    await sess.bus.hops["brain"].put(len(result["clauses"]))
 
-    # [5] 2-Clause buffer hop (measure only the hop itself, not the Brain)
+    # [5] 2-Clause Buffer (time splitting + bus hop)
     t5 = time.perf_counter()
-    await BUS.hops["clause_buffer"].put([c["index"] for c in result["clauses"]])
-    STAGE_TELEMETRY["stage_5"] = (time.perf_counter() - t5) * 1000
+    clause_batch = split_into_clauses(result["reply_text"], call_id)
+    clauses_list = clause_batch.as_list()
+    sess.bus.hops["brain"].get_nowait()
+    await sess.bus.hops["clause_buffer"].put([c["index"] for c in clauses_list])
+    _sync_global_stage("stage_5", (time.perf_counter() - t5) * 1000.0, sess)
 
-    # [6] Timbre TTS for each clause (<=2). clause1 first — <400ms TTFA goal
-    clause_audio = []
-    for c in result["clauses"]:
-        t6 = time.perf_counter()
-        synth = await synthesize_speech(c["text"], use_cache=True)
-        dt = (time.perf_counter() - t6) * 1000
-        STAGE_TELEMETRY["stage_6"] = STAGE_TELEMETRY.get("stage_6", 0) * 0.3 + dt * 0.7
-        await BUS.hops["tts"].put(len(synth["audio"]))
-        if synth["audio"] and is_valid_wav(synth["audio"]):
-            clause_audio.append({
-                "index": c["index"], "priority": c["priority"],
-                "text": c["text"], "tts_latency_ms": round(dt, 1),
-                "audio_b64": base64.b64encode(synth["audio"]).decode("ascii"),
-                "cached": synth.get("cached", False),
-                "fallback": synth.get("fallback", False),
-            })
+    # [6] Timbre TTS (<=2 clauses)
+    clauses_payload, tts_ms = await _synthesize_clauses(clauses_list, sess=sess)
+    _sync_global_stage("stage_6", tts_ms, sess)
+    sess.bus.hops["clause_buffer"].get_nowait()
+    await sess.bus.hops["tts"].put(sum(len(c["audio_base64"]) for c in clauses_payload))
 
-    # unified clauses payload for the Jitter Buffer (Issue 4 contract):
-    # [{text, audio_base64: "data:audio/wav;base64,...", latency_ms}, ...]
-    clauses_payload = [
-        {
-            "index": ca["index"], "priority": ca["priority"],
-            "text": ca["text"],
-            "audio_base64": "data:audio/wav;base64," + ca["audio_b64"],
-            "latency_ms": ca["tts_latency_ms"],
-            "cached": ca["cached"], "fallback": ca["fallback"],
-        }
-        for ca in clause_audio
-    ]
+    # [7] Output Jitter Buffer prep
+    t7 = time.perf_counter()
+    sess.bus.hops["tts"].get_nowait()
+    await sess.bus.hops["jitter_buffer"].put(len(clauses_payload))
+    sess.bus.hops["jitter_buffer"].get_nowait()
+    _sync_global_stage("stage_7", (time.perf_counter() - t7) * 1000.0, sess)
 
     sm.transition("SPEAKING")
+
+    clause_meta = [
+        {
+            "index": cp["index"],
+            "priority": cp["priority"],
+            "text": cp["text"],
+            "tts_latency_ms": cp["latency_ms"],
+            "cached": cp["cached"],
+            "fallback": cp["fallback"],
+        }
+        for cp in clauses_payload
+    ]
+
     result["pipeline"] = {
-        "stages_ms": {k: STAGE_TELEMETRY[k] for k in sorted(STAGE_TELEMETRY) if k.startswith("stage_")},
+        "stages_ms": _stages_snapshot(sess),
         "endpointing": ep,
         "stt": {k: stt_meta.get(k) for k in ("transcript", "request_id", "stt_latency_ms", "fallback")},
-        "queues": BUS.snapshot(),
+        "queues": sess.bus.snapshot(),
+        "input_jitter": sess.input_jitter.snapshot(),
+        "output_jitter": sess.output_jitter.snapshot(),
     }
-    result["clause_audio"] = clause_audio
-    result["clauses"] = clauses_payload          # jitter-buffer contract (data URIs)
+    result["clause_audio"] = clause_meta
+    result["clauses"] = clauses_payload
     result["total_turn_ms"] = round((time.perf_counter() - t_stage1) * 1000, 1)
-    result["barge_in_hint"] = "Press ⚡ Interrupt during read-back to correct policy fields."
+    result["barge_in_hint"] = "Press Interrupt during read-back to correct policy fields."
     return result
 
 
-async def _empty_turn(call_id: str, stt_meta: Dict[str, Any], ep: Dict[str, Any]) -> Dict[str, Any]:
-    """STT returned no words — NEVER stay silent: speak a 2-clause retry
-    prompt through the same Clause Buffer -> Timbre -> Jitter path, and
-    surface a clear hint when the cause is a missing GNANI_API_KEY."""
-    reply = ("Aapki awaaz mujhe saaf nahi aayi ji. "
-             "Mic check kijiye aur apni baat dobara boliye — main sun rahi hoon.")
+@app.post("/api/call/turn")
+async def call_turn(payload: TurnIn) -> Dict[str, Any]:
+    call_id = payload.call_id or "live"
+    sess = REGISTRY.get_or_create(call_id)
+    sm = get_state_machine(call_id)
+    if sm.state == "IDLE":
+        sm.transition("LISTENING")
+    elif sm.state == "SPEAKING":
+        sm.transition("LISTENING")
+
+    cur_task = asyncio.current_task()
+    if cur_task is not None:
+        sm.register_task(cur_task)
+
+    wav_bytes = _decode_b64(payload.wav_b64)
+    return await _run_turn_core(
+        call_id=call_id,
+        sess=sess,
+        sm=sm,
+        wav_bytes=wav_bytes,
+        transcript_override=payload.transcript_override,
+        endpoint_mode=payload.endpoint_mode,
+        vad_silence_ms=payload.vad_silence_ms,
+    )
+
+
+async def _empty_turn(
+    call_id: str,
+    sess: SessionPipeline,
+    stt_meta: Dict[str, Any],
+    ep: Dict[str, Any],
+    sm: Any,
+) -> Dict[str, Any]:
+    """STT returned no words — never stay silent: speak a 2-clause retry prompt."""
+    sm.transition("THINKING")
+    reply = (
+        "Aapki awaaz mujhe saaf nahi aayi ji. "
+        "Mic check kijiye aur apni baat dobara boliye — main sun rahi hoon."
+    )
+    sess.active_agent_reply = reply
+    t5 = time.perf_counter()
     batch = split_into_clauses(reply, call_id + "-empty")
-    clauses_payload = []
-    for c in batch.as_list():
-        synth = await synthesize_speech(c["text"], use_cache=True)
-        wav = synth["audio"] if is_valid_wav(synth["audio"]) else fallback_tts_wav(c["text"])
-        clauses_payload.append({
-            "index": c["index"], "priority": c["priority"],
-            "text": c["text"],
-            "audio_base64": "data:audio/wav;base64," + base64.b64encode(wav).decode("ascii"),
-            "latency_ms": round(float(synth.get("tts_latency_ms") or 0), 1),
-            "cached": synth.get("cached", False),
-            "fallback": synth.get("fallback", False),
-        })
+    _sync_global_stage("stage_5", (time.perf_counter() - t5) * 1000.0, sess)
+
+    clauses_payload, tts_ms = await _synthesize_clauses(batch.as_list(), sess=sess)
+    _sync_global_stage("stage_6", tts_ms, sess)
+    sm.transition("SPEAKING")
+
     hint = None
     if stt_meta.get("fallback"):
-        hint = ("Prisma STT is in Credit-Shield fallback (GNANI_API_KEY missing) — "
-                "set the key via 🔑, or use the typed-line box to drive the conversation.")
+        hint = (
+            "Prisma STT is in Credit-Shield fallback (GNANI_API_KEY missing) — "
+            "set the key via API Key modal, or use the typed-line box / scenario chips."
+        )
     return {
+        "ok": True,
         "call_id": call_id,
         "transcript": "",
         "reply_text": reply,
         "stt_empty": True,
         "hint": hint,
         "clauses": clauses_payload,
-        "clause_audio": [],
+        "clause_audio": [
+            {k: c[k] for k in ("index", "priority", "text", "cached", "fallback")}
+            for c in clauses_payload
+        ],
         "ticket_status": "DRAFT",
-        "entities": {},
+        "entities": BRAIN.get_or_create_call(call_id).entities,
         "tools_invoked": [],
         "memory": BRAIN.get_or_create_call(call_id).snapshot(),
-        "pipeline": {"stages_ms": STAGE_TELEMETRY, "endpointing": ep,
-                     "stt": stt_meta, "queues": BUS.snapshot()},
+        "pipeline": {
+            "stages_ms": _stages_snapshot(sess),
+            "endpointing": ep,
+            "stt": stt_meta,
+            "queues": sess.bus.snapshot(),
+            "input_jitter": sess.input_jitter.snapshot(),
+            "output_jitter": sess.output_jitter.snapshot(),
+        },
     }
 
 
 # ---------------------------------------------------------------------------
-# ⚡ Barge-in — Stop & Flush ALL (<50ms contract)
+# Barge-in — Stop & Flush ALL (<50ms contract) + [interrupted] context dump
 # ---------------------------------------------------------------------------
 
-@app.post("/api/call/barge-in")
-async def call_barge_in(payload: BargeInIn) -> Dict[str, Any]:
+async def _handle_barge_in_core(
+    call_id: str,
+    sess: SessionPipeline,
+    sm: Any,
+    transcript: str = "",
+    spoken_text: str = "",
+    wav_bytes: bytes = b"",
+    pcm_bytes: bytes = b"",
+    source: str = "driver_button",
+    update_cards: bool = True,
+) -> Dict[str, Any]:
     t0 = time.perf_counter()
-    call_id = payload.call_id or "live"
-    sm = get_state_machine(call_id)
+    state_before = sm.state
 
-    flushed = BUS.clear_all()
-    ev = await sm.trigger_barge_in(payload.transcript, flush_fn=lambda: {"flushed_clauses": sum(flushed.values())})
+    flushed_info = sess.flush_all()
+    ev = await sm.trigger_barge_in(
+        transcript,
+        flush_fn=lambda: {"flushed_clauses": flushed_info["total_flushed"]},
+    )
     sm.resume_listening()
+    flush_ms = round((time.perf_counter() - t0) * 1000, 1)
+    _sync_global_stage("stage_8", flush_ms, sess)
+
+    # Snapshot any mic audio captured during/before interruption
+    dump_snap = sess.input_jitter.dump_interruption_snapshot()
+    if not wav_bytes and pcm_bytes:
+        wav_bytes = wrap_pcm_as_wav(pcm_bytes, sample_rate=16000)
+    if not wav_bytes and dump_snap.get("wav"):
+        wav_bytes = dump_snap["wav"]
+
+    audio_stats: Dict[str, Any] = {
+        "duration_ms": dump_snap.get("duration_ms", 0.0),
+        "peak_dbfs": dump_snap.get("peak_dbfs", -120.0),
+        "jitter_ms_est": dump_snap.get("jitter_ms_est", 0.0),
+    }
+    if wav_bytes and len(wav_bytes) > 44:
+        ep_info = analyze_wav_endpoint(wav_bytes, sess.endpoint_state)
+        audio_stats["peak_dbfs"] = ep_info.get("peak_dbfs", audio_stats["peak_dbfs"])
+        audio_stats["duration_ms"] = round(ep_info.get("frames", 0) * 20.0, 1)
+        if not transcript:
+            stt = await transcribe_wav(wav_bytes)
+            if stt.get("transcript"):
+                transcript = stt["transcript"].strip()
+
+    interrupted_ctx = BRAIN.record_interruption(
+        call_id=call_id,
+        mic_text=transcript,
+        spoken_prefix=spoken_text,
+        full_reply=sess.active_agent_reply,
+        audio_stats=audio_stats,
+        source=source,
+    )
 
     cards: Dict[str, Any] = {}
-    if payload.update_cards and payload.transcript:
-        updated = await BRAIN.process_turn(call_id, payload.transcript,
-                                           {"barge_in": True})
+    if update_cards and transcript:
+        sm.transition("THINKING")
+        updated = await BRAIN.process_turn(call_id, transcript, {"barge_in": True})
+        sess.active_agent_reply = updated.get("reply_text", "")
+        clauses_payload, tts_ms = await _synthesize_clauses(updated["clauses"], sess=sess)
+        _sync_global_stage("stage_6", tts_ms, sess)
+        sm.transition("SPEAKING")
         cards = {
+            "stage": updated["stage"],
             "entities": updated["entities"],
             "tools_invoked": updated["tools_invoked"],
             "reply_text": updated["reply_text"],
             "ticket_status": updated["ticket_status"],
-            "clauses": updated["clauses"],
+            "clauses": clauses_payload,
         }
 
     return {
         "call_id": call_id,
-        "flush_latency_ms": round((time.perf_counter() - t0) * 1000, 1),
-        "state_before": "SPEAKING",
+        "source": source,
+        "flush_latency_ms": flush_ms,
+        "state_before": state_before,
         "state_after": sm.state,
-        "queues_flushed": flushed,
+        "queues_flushed": flushed_info["queues"],
+        "output_jitter_flushed": flushed_info["output_jitter_flushed"],
         "cancelled_tasks": ev.cancelled_tasks,
         "turn_counter": sm.turn_counter,
+        "interrupted_context": interrupted_ctx,
+        "memory": BRAIN.get_or_create_call(call_id).snapshot(),
         "cards": cards,
-        "contract_note": "Stop & Flush ALL <50ms (browser audio stops <20ms separately).",
+        "contract_note": "Stop & Flush ALL <50ms (browser audio stops <20ms separately); mic/agent cut tagged [interrupted].",
     }
 
 
+@app.post("/api/call/barge-in")
+async def call_barge_in(payload: BargeInIn) -> Dict[str, Any]:
+    call_id = payload.call_id or "live"
+    sess = REGISTRY.get_or_create(call_id)
+    sm = get_state_machine(call_id)
+    return await _handle_barge_in_core(
+        call_id=call_id,
+        sess=sess,
+        sm=sm,
+        transcript=payload.transcript,
+        spoken_text=payload.spoken_text,
+        wav_bytes=_decode_b64(payload.wav_b64),
+        pcm_bytes=_decode_b64(payload.pcm_b64),
+        source=payload.source or "driver_button",
+        update_cards=payload.update_cards,
+    )
+
+
 # ---------------------------------------------------------------------------
-# 📴 Call end — reset this call's agent memory so the next call starts fresh
+# WebSocket Streaming Pipeline (/ws/call/{call_id})
+# ---------------------------------------------------------------------------
+
+@app.websocket("/ws/call/{call_id}")
+async def ws_call(websocket: WebSocket, call_id: str) -> None:
+    await websocket.accept()
+    call_id = call_id or "live"
+    sess = REGISTRY.get_or_create(call_id)
+    sm = get_state_machine(call_id)
+    ws_lock = asyncio.Lock()
+    active_turn_task: Optional[asyncio.Task] = None
+    frame_counter = 0
+    server_auto_endpoint = True
+
+    async def send_evt(payload: Dict[str, Any]) -> None:
+        async with ws_lock:
+            await websocket.send_json(payload)
+
+    async def _stream_turn(
+        wav_bytes: bytes = b"",
+        transcript_override: str = "",
+        mode: str = "auto_vad",
+        vad_ms: int = 600,
+    ) -> None:
+        t_start = time.perf_counter()
+        cur = asyncio.current_task()
+        if cur is not None:
+            sm.register_task(cur)
+        try:
+            if sm.state == "IDLE":
+                sm.transition("LISTENING")
+            elif sm.state == "SPEAKING":
+                sm.transition("LISTENING")
+
+            # [1] + [3]
+            _sync_global_stage("stage_1", (time.perf_counter() - t_start) * 1000.0, sess)
+            await sess.bus.hops["mic_ingest"].put(len(wav_bytes))
+            sess.endpoint_state.configure(mode=mode, vad_silence_ms=vad_ms)
+            if wav_bytes and len(wav_bytes) > 44:
+                ep = analyze_wav_endpoint(wav_bytes, sess.endpoint_state)
+            else:
+                t3 = time.perf_counter()
+                ep = endpoint_turn(sess.endpoint_state)
+                ep["latency_ms"] = round((time.perf_counter() - t3) * 1000, 2)
+            _sync_global_stage("stage_3", float(ep.get("latency_ms") or 0.0), sess)
+            sess.bus.hops["mic_ingest"].get_nowait()
+            await sess.bus.hops["endpointing"].put(1)
+
+            # [2] STT
+            if transcript_override:
+                transcript = transcript_override.strip()
+                stt_meta: Dict[str, Any] = {
+                    "transcript": transcript,
+                    "request_id": "scripted-" + call_id,
+                    "stt_latency_ms": 0.0,
+                    "fallback": False,
+                }
+            elif wav_bytes and len(wav_bytes) > 44:
+                stt_meta = await transcribe_wav(wav_bytes)
+            else:
+                stt_meta = {"transcript": "", "request_id": "empty", "stt_latency_ms": 0.0, "fallback": True}
+
+            _sync_global_stage("stage_2", float(stt_meta.get("stt_latency_ms") or 0.0), sess)
+            sess.bus.hops["endpointing"].get_nowait()
+            await sess.bus.hops["stt"].put(stt_meta.get("transcript", ""))
+            transcript = stt_meta.get("transcript", "")
+
+            await send_evt({
+                "type": "stt_result",
+                "call_id": call_id,
+                "transcript": transcript,
+                "stt": stt_meta,
+                "endpointing": ep,
+            })
+
+            if not transcript:
+                sess.bus.hops["stt"].get_nowait()
+                empty_res = await _empty_turn(call_id, sess, stt_meta, ep, sm)
+                await send_evt({"type": "brain_result", **empty_res})
+                for cp in empty_res["clauses"]:
+                    await send_evt({"type": "tts_clause", "call_id": call_id, "clause": cp})
+                await send_evt({"type": "turn_complete", "call_id": call_id, "pipeline": empty_res["pipeline"]})
+                return
+
+            # [4] Brain
+            sm.transition("THINKING")
+            t4 = time.perf_counter()
+            result = await BRAIN.process_turn(call_id, transcript, stt_meta)
+            _sync_global_stage("stage_4", (time.perf_counter() - t4) * 1000.0, sess)
+            sess.active_agent_reply = result.get("reply_text", "")
+            sess.bus.hops["stt"].get_nowait()
+            await sess.bus.hops["brain"].put(len(result["clauses"]))
+
+            # [5] 2-Clause Buffer
+            t5 = time.perf_counter()
+            clauses_list = split_into_clauses(result["reply_text"], call_id).as_list()
+            sess.bus.hops["brain"].get_nowait()
+            await sess.bus.hops["clause_buffer"].put([c["index"] for c in clauses_list])
+            _sync_global_stage("stage_5", (time.perf_counter() - t5) * 1000.0, sess)
+
+            await send_evt({
+                "type": "brain_result",
+                "call_id": call_id,
+                "stage": result["stage"],
+                "transcript": transcript,
+                "reply_text": result["reply_text"],
+                "entities": result["entities"],
+                "tools_invoked": result["tools_invoked"],
+                "ticket_status": result["ticket_status"],
+                "memory": result["memory"],
+                "clauses_meta": clauses_list,
+            })
+
+            # [6] -> [7] -> [8] Stream Clause 1 immediately before Clause 2 finishes!
+            sm.transition("SPEAKING")
+            sess.bus.hops["clause_buffer"].get_nowait()
+            tts_total_ms = 0.0
+            streamed_clauses: List[Dict[str, Any]] = []
+            for c in clauses_list:
+                cp = await _synthesize_one_clause(c, sess=sess)
+                tts_total_ms += float(cp["latency_ms"])
+                streamed_clauses.append(cp)
+                await sess.bus.hops["tts"].put(len(cp["audio_base64"]))
+                sess.bus.hops["tts"].get_nowait()
+                await sess.bus.hops["jitter_buffer"].put(cp["index"])
+                sess.bus.hops["jitter_buffer"].get_nowait()
+                await send_evt({"type": "tts_clause", "call_id": call_id, "clause": cp})
+
+            _sync_global_stage("stage_6", tts_total_ms, sess)
+            _sync_global_stage("stage_7", 0.5, sess)
+            await send_evt({
+                "type": "turn_complete",
+                "call_id": call_id,
+                "total_turn_ms": round((time.perf_counter() - t_start) * 1000, 1),
+                "pipeline": {
+                    "stages_ms": _stages_snapshot(sess),
+                    "endpointing": ep,
+                    "stt": {k: stt_meta.get(k) for k in ("transcript", "request_id", "stt_latency_ms", "fallback")},
+                    "queues": sess.bus.snapshot(),
+                    "input_jitter": sess.input_jitter.snapshot(),
+                    "output_jitter": sess.output_jitter.snapshot(),
+                },
+            })
+        except asyncio.CancelledError:
+            pass
+
+    await send_evt({
+        "type": "ready",
+        "call_id": call_id,
+        "jitter_config": {
+            "frame_ms": 20,
+            "input_target_ms": sess.input_jitter.target_frames * 20,
+            "output_prebuffer_ms": sess.output_jitter.prebuffer_ms,
+        },
+        "sessions": REGISTRY.snapshot(),
+    })
+
+    try:
+        while True:
+            msg = await websocket.receive_json()
+            sess.touch()
+            mtype = str(msg.get("type") or "")
+
+            if mtype == "ping":
+                await send_evt({"type": "pong", "sessions": REGISTRY.snapshot()})
+
+            elif mtype == "config":
+                sess.endpoint_state.configure(
+                    mode=msg.get("endpoint_mode"),
+                    vad_silence_ms=msg.get("vad_silence_ms"),
+                )
+                if msg.get("vad_silence_ms"):
+                    sess.input_jitter.configure_vad(int(msg["vad_silence_ms"]))
+                if "server_auto_endpoint" in msg:
+                    server_auto_endpoint = bool(msg["server_auto_endpoint"])
+
+            elif mtype == "start":
+                if active_turn_task and not active_turn_task.done():
+                    active_turn_task.cancel()
+                BRAIN.reset_call(call_id)
+                sess.input_jitter.clear_speech()
+                sess.output_jitter.flush()
+                if sm.state != "IDLE":
+                    sm.transition("IDLE")
+                sm.transition("LISTENING")
+                sm.transition("THINKING")
+                started = await BRAIN.start_call(call_id)
+                sess.active_agent_reply = started["reply_text"]
+                await send_evt({
+                    "type": "brain_result",
+                    "call_id": call_id,
+                    "is_greeting": True,
+                    "stage": started["memory"]["stage"],
+                    "reply_text": started["reply_text"],
+                    "ticket_status": started["ticket_status"],
+                    "memory": started["memory"],
+                    "entities": started["memory"]["entities"],
+                })
+                sm.transition("SPEAKING")
+                for c in started["clauses"]:
+                    cp = await _synthesize_one_clause(c, sess=sess)
+                    await send_evt({"type": "tts_clause", "call_id": call_id, "clause": cp})
+                await send_evt({
+                    "type": "turn_complete",
+                    "call_id": call_id,
+                    "is_greeting": True,
+                    "pipeline": {
+                        "stages_ms": _stages_snapshot(sess),
+                        "queues": sess.bus.snapshot(),
+                        "input_jitter": sess.input_jitter.snapshot(),
+                        "output_jitter": sess.output_jitter.snapshot(),
+                    },
+                })
+
+            elif mtype == "audio_frame":
+                pcm = _decode_b64(msg.get("pcm_b64", ""))
+                seq = msg.get("seq")
+                ts_ms = msg.get("ts_ms")
+                events = sess.input_jitter.push(pcm, seq=seq, ts_ms=ts_ms)
+                frame_counter += 1
+                triggered_vad_barge = False
+                triggered_endpoint = False
+                for ev in events:
+                    if ev["vad"] == "speech" and sm.state in ("SPEAKING", "THINKING") and not triggered_vad_barge:
+                        triggered_vad_barge = True
+                        if active_turn_task and not active_turn_task.done():
+                            active_turn_task.cancel()
+                        ack = await _handle_barge_in_core(
+                            call_id=call_id,
+                            sess=sess,
+                            sm=sm,
+                            source="server_vad_mic",
+                            update_cards=False,
+                        )
+                        await send_evt({"type": "barge_in_ack", **ack})
+                    elif ev["vad"] == "endpoint" and sess.endpoint_state.mode == "auto_vad" and server_auto_endpoint:
+                        triggered_endpoint = True
+                        wav = sess.input_jitter.take_utterance_wav()
+                        if wav:
+                            await send_evt({
+                                "type": "endpoint_detected",
+                                "call_id": call_id,
+                                "input_jitter": sess.input_jitter.snapshot(),
+                            })
+                            if active_turn_task and not active_turn_task.done():
+                                active_turn_task.cancel()
+                            active_turn_task = asyncio.create_task(
+                                _stream_turn(
+                                    wav_bytes=wav,
+                                    mode=sess.endpoint_state.mode,
+                                    vad_ms=sess.endpoint_state.vad_silence_ms,
+                                )
+                            )
+                if frame_counter % 5 == 0 or triggered_vad_barge or triggered_endpoint:
+                    await send_evt({
+                        "type": "vad_state",
+                        "in_speech": sess.input_jitter._in_speech,
+                        "dbfs": sess.input_jitter.last_dbfs,
+                        "input_jitter": sess.input_jitter.snapshot(),
+                    })
+
+            elif mtype == "barge_in":
+                if active_turn_task and not active_turn_task.done():
+                    active_turn_task.cancel()
+                ack = await _handle_barge_in_core(
+                    call_id=call_id,
+                    sess=sess,
+                    sm=sm,
+                    transcript=str(msg.get("transcript") or ""),
+                    spoken_text=str(msg.get("spoken_text") or ""),
+                    wav_bytes=_decode_b64(msg.get("wav_b64", "")),
+                    pcm_bytes=_decode_b64(msg.get("pcm_b64", "")),
+                    source=str(msg.get("source") or "client_barge_in"),
+                    update_cards=bool(msg.get("update_cards", True)),
+                )
+                await send_evt({"type": "barge_in_ack", **ack})
+
+            elif mtype == "end_turn":
+                if active_turn_task and not active_turn_task.done():
+                    active_turn_task.cancel()
+                wav_bytes = _decode_b64(msg.get("wav_b64", ""))
+                if not wav_bytes and not msg.get("transcript_override"):
+                    wav_bytes = sess.input_jitter.take_utterance_wav(include_preroll_if_empty=True)
+                active_turn_task = asyncio.create_task(
+                    _stream_turn(
+                        wav_bytes=wav_bytes,
+                        transcript_override=str(msg.get("transcript_override") or ""),
+                        mode=str(msg.get("endpoint_mode") or sess.endpoint_state.mode),
+                        vad_ms=int(msg.get("vad_silence_ms") or sess.endpoint_state.vad_silence_ms),
+                    )
+                )
+
+            elif mtype == "end_call":
+                if active_turn_task and not active_turn_task.done():
+                    active_turn_task.cancel()
+                BRAIN.reset_call(call_id)
+                reset_state_machine(call_id)
+                REGISTRY.remove(call_id)
+                await send_evt({"type": "call_ended", "call_id": call_id})
+                break
+
+    except WebSocketDisconnect:
+        if active_turn_task and not active_turn_task.done():
+            active_turn_task.cancel()
+
+
+# ---------------------------------------------------------------------------
+# Call end — reset call memory, state machine, and session pipeline
 # ---------------------------------------------------------------------------
 
 @app.post("/api/call/end")
 async def call_end(payload: EndIn) -> Dict[str, Any]:
-    """Hang up: wipe this call's short-term conversation memory so the next
-    call starts with a clean slate — zero cross-call context bleed (the
-    previous turn's entities, parts, policy, stage and ticket status are all
-    dropped)."""
     call_id = payload.call_id or "live"
     BRAIN.reset_call(call_id)
-    sm = get_state_machine(call_id)
-    sm.transition("IDLE")
+    reset_state_machine(call_id)
+    REGISTRY.remove(call_id)
     return {
         "ok": True,
         "call_id": call_id,
@@ -434,16 +964,15 @@ async def call_end(payload: EndIn) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Direct TTS (used by jitter-buffer top-up + tests)
+# Direct TTS
 # ---------------------------------------------------------------------------
 
 @app.post("/api/tts")
 async def tts(payload: TtsIn) -> Dict[str, Any]:
     synth = await synthesize_speech(payload.text, use_cache=payload.use_cache)
-    if synth["audio"] and not is_valid_wav(synth["audio"]):
-        synth["audio"] = fallback_tts_wav(payload.text)
+    wav = synth["audio"] if is_valid_wav(synth.get("audio", b"")) else fallback_tts_wav(payload.text)
     return {
-        "audio_b64": base64.b64encode(synth["audio"]).decode("ascii"),
+        "audio_b64": base64.b64encode(wav).decode("ascii"),
         "cached": synth.get("cached"),
         "tts_latency_ms": synth.get("tts_latency_ms"),
         "model": synth.get("model"),
@@ -453,25 +982,28 @@ async def tts(payload: TtsIn) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Evaluation suite
+# Evaluation suite (non-polluting: does not write fake rows to call_history.json)
 # ---------------------------------------------------------------------------
 
 @app.post("/api/eval")
 async def eval_api(payload: Optional[EvalIn] = None) -> Dict[str, Any]:
     if payload is not None and not payload.run:
         return {"ok": False, "reason": "run=false"}
-    results = await eval_runner.run_eval_suite()
+    results = await eval_runner.run_eval_suite(persist_history=False)
     return {"ok": True, **results}
 
 
 @app.get("/api/pipeline-state")
-async def pipeline_state() -> Dict[str, Any]:
+async def pipeline_state(call_id: Optional[str] = None) -> Dict[str, Any]:
+    sess = REGISTRY.get(call_id) if call_id else None
     return {
-        "queues": BUS.snapshot(),
-        "stages_ms": {k: round(v, 1) for k, v in STAGE_TELEMETRY.items() if k != "stage_names"},
-        "stage_names": STAGE_TELEMETRY["stage_names"],
-        "barge_in": {sid: sm.snapshot() for sid, sm in
-                     __import__("backend.pipeline.barge_in", fromlist=["x"]).SESSION_STATE_MACHINES.items()},
+        "sessions": REGISTRY.snapshot(),
+        "queues": sess.bus.snapshot() if sess else BUS.snapshot(),
+        "stages_ms": _stages_snapshot(sess),
+        "stage_names": _stage_names(),
+        "input_jitter": sess.input_jitter.snapshot() if sess else None,
+        "output_jitter": sess.output_jitter.snapshot() if sess else None,
+        "barge_in": {sid: sm.snapshot() for sid, sm in SESSION_STATE_MACHINES.items()},
     }
 
 
@@ -485,9 +1017,11 @@ if FRONTEND_DIR.exists():
 
 @app.exception_handler(Exception)
 async def turn_errors(request: Request, exc: Exception) -> JSONResponse:
-    """Zero-crash rule: API never 500s into the demo UI."""
     return JSONResponse(
-        status_code=200,
-        content={"ok": False, "error": str(exc)[:200],
-                 "degraded": "BimaVani Credit-Shield engaged — demo continues."},
+        status_code=500,
+        content={
+            "ok": False,
+            "error": str(exc)[:200],
+            "degraded": "Internal error encountered; client should recover gracefully.",
+        },
     )

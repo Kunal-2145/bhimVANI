@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>BimaVani — Voice Roadside Assistance</title>
-<link rel="stylesheet" href="/style.css?v=20261110m">
+<title>BimaVani — 24×7 Hinglish Voice RSA & IRDAI Claim Desk</title>
+<link rel="stylesheet" href="/style.css?v=20261110w">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛣️</text></svg>">
 </head>
 <body>
@@ -14,10 +14,13 @@
   <a class="brand" href="/">
     <span class="brand-mark">🛣️</span>
     <span class="brand-name">BimaVani</span>
+    <span class="brand-sub">1-800-BIMA-VANI</span>
   </a>
   <div class="topbar-right">
-    <span class="kicker">01 / LIVE VOICE HELPLINE</span>
-    <span id="mode-pill" class="chip-status">…</span>
+    <span class="kicker">HINGLISH RSA + IRDAI CLAIM DESK</span>
+    <button id="btn-open-key" class="chip-btn" type="button" title="Configure & test Gnani API Key">🔑 Gnani API</button>
+    <button id="btn-open-eval" class="chip-btn" type="button" title="Run 20-Case Evaluation Benchmark">📊 Benchmark</button>
+    <button id="mode-pill" class="chip-status chip-clickable" type="button" title="Current voice engine mode">…</button>
     <span id="call-timer" class="timer">00:00</span>
   </div>
 </header>
@@ -25,19 +28,31 @@
 <!-- =============================== STAGE ============================== -->
 <main class="stage">
 
-  <!-- ---------------------- LEFT: the conversation --------------------- -->
+  <!-- ---------------------- LEFT: conversation & quick demo --------------------- -->
   <section class="hero">
-    <p class="eyebrow">1-800-BIMA-VANI · ROADSIDE ASSISTANCE · 24×7</p>
+    <p class="eyebrow">24×7 ROADSIDE ASSISTANCE · INJURY TRIAGE · IRDAI FNOL</p>
 
-    <!-- Big state line: what the agent is doing right now -->
     <h1 id="hero-line">Tap call.<br>Then just talk.</h1>
     <p class="hero-sub" id="hero-sub">
-      BimaVani answers in Hinglish, listens while you speak, and answers the moment you pause.
+      BimaVani answers in Hinglish, listens while you speak, dispatches RSA workflows, and auto-drafts IRDAI claims the moment you pause.
     </p>
 
-    <!-- Voice agent setup: everything that tunes the ears, not the brain -->
+    <!-- One-click demo scenarios (works even with mic blocked or in Credit-Shield mode) -->
+    <div class="demo-bar" aria-label="Quick Hinglish test scenarios">
+      <p class="demo-label">TRY A REAL SCENARIO (AUTO-CALLS IF IDLE)</p>
+      <div class="demo-chips">
+        <button class="demo-chip" type="button" data-utterance="NH-44 highway par crash ho gaya, radiator phat gaya hai aur bumper mein dent hai, policy number 7820">🚗 NH-44 Crash (#7820)</button>
+        <button class="demo-chip" type="button" data-utterance="Delhi mein Activa ki battery dead aur puncture ho gaya hai, policy number 4491">🛵 City NCB Saver (#4491)</button>
+        <button class="demo-chip" type="button" data-utterance="Gaon ki link road par Bolero ka axle twist ho gaya, tow bhejo policy number 9932">🚜 Rural Axle ₹1,500 (#9932)</button>
+        <button class="demo-chip" type="button" data-utterance="Accident ho gaya, sar mein chot lagi hai khoon beh raha hai">🚨 Injury 112</button>
+        <button class="demo-chip demo-chip--barge" type="button" data-barge="Ruko nahi nahi, mera policy number chaar hazaar chaar sau ikyaanave hai">⚡ Barge-In → #4491</button>
+        <button class="demo-chip" type="button" data-utterance="Haan confirm kar do">✅ Confirm ("Haan kar do")</button>
+      </div>
+    </div>
+
+    <!-- Voice agent setup: mic tuning, road noise mixer, typed fallback -->
     <details class="setup">
-      <summary>Voice agent setup</summary>
+      <summary>Voice agent setup &amp; road noise mixer</summary>
       <div class="setup-body">
         <label class="slider">
           <span>Silence before send <b id="vad-window">650</b> ms</span>
@@ -52,8 +67,8 @@
           <span class="row-label">Road noise</span>
           <select id="noise-preset">
             <option value="clean" selected>Clean studio</option>
-            <option value="mandi">Mandi / auto stand</option>
-            <option value="highway">NH-44 highway</option>
+            <option value="mandi">Mandi / auto stand (-15 dB)</option>
+            <option value="highway">NH-44 highway (-10 dB)</option>
             <option value="gsm">8 kHz phone line</option>
           </select>
         </label>
@@ -63,10 +78,10 @@
         </div>
 
         <div class="type-row">
-          <input id="type-say" placeholder="No mic? Type what you'd say…" autocomplete="off">
-          <button id="btn-say" class="btn-quiet">Send</button>
+          <input id="type-say" placeholder="No mic? Type Hinglish or Hindi…" autocomplete="off">
+          <button id="btn-say" class="btn-quiet" type="button">Send</button>
         </div>
-        <p class="micro">VAD always listens to the raw mic, before any noise is mixed in.</p>
+        <p class="micro">Auto-VAD listens to the raw clean mic before any simulated road noise is mixed into the sent WAV.</p>
       </div>
     </details>
   </section>
@@ -75,7 +90,6 @@
   <section class="call-scene" id="call-scene" data-phase="idle" aria-label="Live call between you and BimaVani">
     <div class="halo" aria-hidden="true"></div>
 
-    <!-- the line that carries the voice between the two phones -->
     <div class="call-link is-idle" id="call-link">
       <span class="link-arrow" aria-hidden="true">◀</span>
       <span class="link-waves" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
@@ -86,7 +100,7 @@
 
     <div class="phones">
 
-      <!-- ==================== THE CALLER — you (the driver's phone) ==================== -->
+      <!-- ==================== THE CALLER ==================== -->
       <div class="phone phone--caller" id="phone-caller">
         <span class="phone-notch" aria-hidden="true"></span>
         <div class="phone-bar">
@@ -97,7 +111,6 @@
           <span class="phone-led" aria-hidden="true"></span>
         </div>
 
-        <!-- who you are calling + live call status -->
         <div class="contact">
           <div class="contact-avatar" aria-hidden="true">🛣️</div>
           <div class="contact-meta">
@@ -110,17 +123,15 @@
           </div>
         </div>
 
-        <!-- what you said, as Prisma heard it -->
         <div class="phone-card phone-card--said">
-          <button id="say-edit" class="say-edit" title="Type your turn instead">✎</button>
+          <button id="say-edit" class="say-edit" type="button" title="Type your turn instead">✎</button>
           <p class="phone-label">Aap ne kaha</p>
           <p class="phone-say" id="stt-transcript">Nothing yet — the driver's words will appear here.</p>
           <p class="caption">The driver's words, as Gnani Prisma heard them.</p>
         </div>
 
-        <!-- your mic: tap to talk -->
         <div class="orb-zone">
-          <button id="btn-ptt" class="orb" aria-label="Microphone">
+          <button id="btn-ptt" class="orb" type="button" aria-label="Microphone">
             <span class="orb-core"></span>
           </button>
           <p id="ptt-hint" class="phone-hint">Press Call to start</p>
@@ -134,21 +145,19 @@
           </div>
         </div>
 
-        <!-- Push-to-talk only controls -->
         <div id="ptt-controls" class="ptt-controls hidden">
-          <button id="btn-ptt-send" class="btn-quiet" disabled>Send</button>
-          <button id="btn-ptt-cancel" class="btn-quiet" disabled>Cancel</button>
+          <button id="btn-ptt-send" class="btn-quiet" type="button" disabled>Send</button>
+          <button id="btn-ptt-cancel" class="btn-quiet" type="button" disabled>Cancel</button>
           <span id="ptt-timer" class="ptt-timer">0.0s</span>
         </div>
 
-        <!-- Call / End: round handset buttons, like a real phone -->
         <div class="phone-call-controls">
           <div class="call-btn-wrap">
-            <button id="btn-dial" class="btn-call" aria-label="Call BimaVani">📞</button>
+            <button id="btn-dial" class="btn-call" type="button" aria-label="Call BimaVani">📞</button>
             <span>Call</span>
           </div>
           <div class="call-btn-wrap">
-            <button id="btn-end" class="btn-end" aria-label="End call" disabled>⏹</button>
+            <button id="btn-end" class="btn-end" type="button" aria-label="End call" disabled>⏹</button>
             <span>End</span>
           </div>
         </div>
@@ -156,18 +165,18 @@
         <p class="phone-foot">You · 1-800-BIMA-VANI</p>
       </div>
 
-      <!-- ================= MIDDLE GAP — the line + turn-taking controls ================= -->
+      <!-- ================= MIDDLE GAP ================= -->
       <div class="call-middle">
         <div class="wire" aria-hidden="true"><i></i></div>
         <div class="seg" role="radiogroup" aria-label="Turn taking">
-          <button class="seg-btn active" data-mode="auto_vad">Auto-VAD</button>
-          <button class="seg-btn" data-mode="push_to_talk">Push-to-talk</button>
+          <button class="seg-btn active" type="button" data-mode="auto_vad">Auto-VAD</button>
+          <button class="seg-btn" type="button" data-mode="push_to_talk">Push-to-talk</button>
         </div>
-        <button id="btn-barge-in" class="btn-quiet" disabled>Interrupt</button>
-        <p class="middle-hint">Between the two handsets · keeps working mid-call</p>
+        <button id="btn-barge-in" class="btn-quiet" type="button" disabled>⚡ Interrupt</button>
+        <p class="middle-hint">Between handsets · &lt;50ms flush</p>
       </div>
 
-      <!-- =================== THE AGENT — BimaVani's phone =================== -->
+      <!-- =================== THE AGENT =================== -->
       <div class="phone phone--agent" id="phone-agent">
         <span class="phone-notch" aria-hidden="true"></span>
         <div class="phone-bar">
@@ -176,11 +185,10 @@
             BimaVani <span class="phone-tag phone-tag--live">Agent</span>
           </span>
           <span class="phone-icons">
-            <button class="icon-btn" id="btn-barge-in-2" title="Interrupt the agent">⏹</button>
+            <button class="icon-btn" id="btn-barge-in-2" type="button" title="Interrupt the agent" disabled>⏹</button>
           </span>
         </div>
 
-        <!-- who is on the line + live call status -->
         <div class="contact contact--agent">
           <div class="contact-avatar" aria-hidden="true">🧑</div>
           <div class="contact-meta">
@@ -193,14 +201,12 @@
           </div>
         </div>
 
-        <!-- what the agent says, streaming clause by clause -->
         <div class="phone-card phone-card--agent">
           <canvas id="waveform" width="320" height="64"></canvas>
           <p id="agent-reply" class="phone-say">The agent will greet you here.</p>
           <p id="call-state" class="phone-state">Not connected</p>
         </div>
 
-        <!-- the agent's voice: is BimaVani speaking? -->
         <div class="voice-zone">
           <div class="agent-orb" aria-hidden="true">
             <span class="agent-orb-core">🛣️</span>
@@ -210,7 +216,6 @@
 
         <p class="phone-foot">1-800-BIMA-VANI · synthetic demo data</p>
 
-        <!-- incoming-call screen: shown only while the phone is ringing -->
         <div class="incoming" id="agent-incoming" aria-hidden="true">
           <p class="incoming-label">Incoming call</p>
           <div class="incoming-avatar"><span>🧑</span></div>
@@ -228,15 +233,74 @@
   </section>
 </main>
 
-<!-- ================= BOTTOM BAND: flow + latency ===================== -->
+<!-- ================= LIVE CASE INTELLIGENCE & IRDAI DESK =============== -->
+<section class="deskband" aria-label="Live RSA Dispatch and IRDAI Claim Intelligence">
+  <div class="desk-head">
+    <div>
+      <span class="kicker">LIVE CASE INTELLIGENCE &amp; IRDAI CLAIM DESK</span>
+      <span id="ticket-badge" class="chip-status">DRAFT</span>
+    </div>
+    <div id="safety-banner" class="safety-pill is-neutral">🛡️ Safety Triage: Standby</div>
+  </div>
+
+  <div id="entity-strip" class="entity-strip">
+    <span class="ent-chip"><b>Policy</b><em id="ent-policy">—</em></span>
+    <span class="ent-chip"><b>Road</b><em id="ent-road">—</em></span>
+    <span class="ent-chip"><b>Parts</b><em id="ent-parts">—</em></span>
+    <span class="ent-chip"><b>Drivable</b><em id="ent-drivable">—</em></span>
+    <span class="ent-chip"><b>Stage</b><em id="ent-stage">idle</em></span>
+  </div>
+
+  <div class="desk-grid">
+    <!-- Card 1: RSA Dispatch Ticket -->
+    <article class="desk-card" id="rsa-card">
+      <div class="desk-card-head">
+        <h3>🚑 Smart RSA Dispatch</h3>
+        <span id="rsa-wf-badge" class="wf-badge">—</span>
+      </div>
+      <div id="rsa-body" class="desk-card-body">
+        <p class="muted">Start a call or click a demo scenario to view live RSA workflow routing (A: NCB Saver · B: Flatbed Tow · C: Cashless Self-Drive).</p>
+      </div>
+    </article>
+
+    <!-- Card 2: IRDAI FNOL Claim Draft -->
+    <article class="desk-card" id="fnol-card">
+      <div class="desk-card-head">
+        <h3>📋 IRDAI FNOL Claim Draft</h3>
+        <span id="fnol-id-badge" class="wf-badge">—</span>
+      </div>
+      <div id="fnol-body" class="desk-card-body">
+        <p class="muted">Synthetic DPDP-safe claim math (deductible + age-scaled depreciation + surveyor range disclaimer) populates automatically when applicable.</p>
+      </div>
+    </article>
+
+    <!-- Card 3: Live Turn Transcript Log -->
+    <article class="desk-card" id="log-card">
+      <div class="desk-card-head">
+        <h3>💬 Call Transcript &amp; Model Context</h3>
+        <span id="log-count" class="wf-badge">0 turns</span>
+      </div>
+      <div id="transcript-log" class="transcript-log">
+        <p class="muted">Multi-turn Hinglish conversation &amp; [interrupted] context log will appear here.</p>
+      </div>
+    </article>
+  </div>
+</section>
+
+<!-- ================= BOTTOM BAND: pipeline + latency ==================== -->
 <footer class="flowband">
   <div class="flow-head">
-    <span class="kicker">STREAMING PIPELINE</span>
+    <div class="flow-head-left">
+      <span class="kicker">STREAMING 8-STAGE PIPELINE</span>
+      <span id="ws-pill" class="chip-status">⚡ WS Ready</span>
+      <span id="session-pill" class="chip-status">Sessions: 0</span>
+      <span id="jitter-pill" class="chip-status">In-Jitter: 60ms · Out: 120ms</span>
+    </div>
     <span id="brain-pill" class="chip-status">🧠 …</span>
   </div>
 
   <div class="flow-strip">
-    <div class="node" data-stage="1"><span class="node-ico">🎤</span><span class="node-name">Mic</span><span class="node-ms">—</span><span class="node-q" data-q="mic_ingest">0</span></div>
+    <div class="node" data-stage="1"><span class="node-ico">🎤</span><span class="node-name">Mic · 20ms</span><span class="node-ms">—</span><span class="node-q" data-q="mic_ingest">0</span></div>
     <span class="arrow">→</span>
     <div class="node" data-stage="2"><span class="node-ico">🗣️</span><span class="node-name">Prisma ASR</span><span class="node-ms">—</span><span class="node-q" data-q="stt">0</span></div>
     <span class="arrow">→</span>
@@ -267,6 +331,59 @@
   <p id="foot-meta" class="foot-meta"></p>
 </footer>
 
-<script src="/app.js?v=20261110m"></script>
+<!-- ================= MODAL: GNANI API KEY & LIVE VERIFY ================= -->
+<div id="modal-gnani" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="gnani-modal-title">
+  <div class="modal-backdrop" data-close="modal-gnani"></div>
+  <div class="modal-panel">
+    <div class="modal-head">
+      <div>
+        <p class="kicker">GNANI.AI VACHANA ECOSYSTEM</p>
+        <h2 id="gnani-modal-title">API Key &amp; Live Round-Trip Diagnostics</h2>
+      </div>
+      <button class="icon-btn" type="button" data-close="modal-gnani" aria-label="Close">✕</button>
+    </div>
+
+    <div id="gnani-config-summary" class="modal-grid-info"></div>
+
+    <form id="key-form" class="key-form">
+      <label class="key-label" for="gnani-key-input">GNANI_API_KEY (hot-reloads in memory; leave blank to revert to Credit-Shield)</label>
+      <div class="type-row">
+        <input id="gnani-key-input" type="password" placeholder="Paste your Gnani API key from app.gnani.ai/voice…" autocomplete="off">
+        <button id="btn-save-key" class="btn-call-sm" type="submit">Save Key</button>
+      </div>
+    </form>
+
+    <div class="modal-actions">
+      <button id="btn-verify-gnani" class="btn-quiet" type="button">🧪 Test Live Timbre ⇄ Prisma Round-Trip</button>
+      <span id="key-save-status" class="micro-status"></span>
+    </div>
+
+    <div id="verify-output" class="verify-box hidden"></div>
+  </div>
+</div>
+
+<!-- ================= MODAL: 20-CASE EVALUATION BENCHMARK ================= -->
+<div id="modal-eval" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="eval-modal-title">
+  <div class="modal-backdrop" data-close="modal-eval"></div>
+  <div class="modal-panel modal-panel--wide">
+    <div class="modal-head">
+      <div>
+        <p class="kicker">HONEST DETERMINISTIC BENCHMARK</p>
+        <h2 id="eval-modal-title">20-Case Evaluation &amp; Acoustic Waterfall</h2>
+      </div>
+      <button class="icon-btn" type="button" data-close="modal-eval" aria-label="Close">✕</button>
+    </div>
+
+    <div class="modal-actions">
+      <button id="btn-run-eval" class="btn-call-sm" type="button">▶ Run 20-Case Suite</button>
+      <span id="eval-status" class="micro-status">Click Run to benchmark Clean / NH-44 Highway / 8kHz GSM / Barge-In / Misses.</span>
+    </div>
+
+    <div id="eval-summary-cards" class="eval-kpis"></div>
+    <div id="eval-table-wrap" class="eval-table-wrap"></div>
+  </div>
+</div>
+
+<script src="/app.js?v=20261110w"></script>
 </body>
 </html>
