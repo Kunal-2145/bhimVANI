@@ -764,19 +764,6 @@ function pickSpeechVoice(lang) {
   } catch { return null; }
 }
 
-function speakFallback(text, lang) {
-  try {
-    if (!window.speechSynthesis || !text) return false;
-    const resolved = detectTextLanguage(text, lang || S.detectedLang);
-    const u = new SpeechSynthesisUtterance(text);
-    const v = pickSpeechVoice(resolved);
-    if (v) u.voice = v;
-    u.lang = resolved; u.rate = 0.98; u.pitch = 1.05;
-    speechSynthesis.speak(u);
-    return true;
-  } catch { return false; }
-}
-
 function speakFallbackAsync(text, lang) {
   return new Promise((resolve) => {
     try {

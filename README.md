@@ -1,7 +1,7 @@
 # BimaVani (बीमा-वाणी) 🛣️
 ### 24×7 Multilingual Voice-First Roadside Assistance + IRDAI Claim Desk — Helpline `1-800-BIMA-VANI`
 
-[![BimaVani CI](https://github.com/Kunal-2145/bhimVANI/actions/workflows/ci.yml/badge.svg)](https://github.com/Kunal-2145/bhimVANI/actions/workflows/ci.yml) · 📄 **[1-Page Project Pitch (`PITCH.md`)](PITCH.md)** · 📊 **[Benchmarks (`EVALUATION.md`)](EVALUATION.md)** · 🚀 **[Run & Submit Guide (`HOW_TO_USE_AND_SUBMIT.md`)](HOW_TO_USE_AND_SUBMIT.md)**
+[![BimaVani CI](https://github.com/Kunal-2145/bhimVANI/actions/workflows/ci.yml/badge.svg)](https://github.com/Kunal-2145/bhimVANI/actions/workflows/ci.yml) · 📄 **[1-Page Project Pitch (`PITCH.md`)](PITCH.md)** · 📊 **[Benchmarks (`EVALUATION.md`)](EVALUATION.md)**
 
 A production-grade voice-AI system proving **one thesis end-to-end**:
 
@@ -62,8 +62,8 @@ Built on the **Gnani.ai Vachana/Artha ecosystem**: **Prisma v3.0/v2.5** STT +
 | Feature | Contract |
 |---|---|
 | Keys | `app.gnani.ai/voice` → env `GNANI_API_KEY`, header `X-API-Key-ID` (or hot-loaded in UI **🔑 Gnani API** modal) |
-| STT | `POST {GNANI_BASE_URL:-https://api.vachana.ai}/stt/v3` · `prisma-v3.0` (`indic-auto` / explicit language / `codemix`) |
-| TTS | `POST /api/v1/tts/inference` · `timbre-v3.0` (per-language native voices, 24 kHz linear PCM WAV) |
+| STT | `POST {GNANI_BASE_URL:-https://api.vachana.ai}/stt/v3` · `prisma-v2.5` (`codemix`) & `prisma-v3.0` (`indic-auto` / regional) |
+| TTS | `POST /api/v1/tts/inference` · `timbre-v2.5` (per-language native voices) / `timbre-v3.0` (*Lakshmi*), 24 kHz linear PCM WAV |
 | Cache | `hashlib.md5("tts-v2|mode|text|voice|model|lang").wav` under `backend/cache/tts/` → demo re-runs cost **0 credits** |
 | Fallback | **Credit-Shield Fallback Mode** when `GNANI_API_KEY` is unset — full pipeline + deterministic spoken-tone WAV |
 
@@ -87,6 +87,9 @@ Built on the **Gnani.ai Vachana/Artha ecosystem**: **Prisma v3.0/v2.5** STT +
 ## Run & Test
 
 ```bash
+# Configure optional live Gnani API key (from https://app.gnani.ai/voice)
+cp .env.example .env
+
 # Run web UI + FastAPI + WebSocket server (http://127.0.0.1:8000)
 ./run.sh            # Windows: run.bat
 
@@ -96,23 +99,22 @@ Built on the **Gnani.ai Vachana/Artha ecosystem**: **Prisma v3.0/v2.5** STT +
 # Run 20-case acoustic/barge-in + 30-case 10-language + engineering layer benchmark
 .venv/bin/python backend/eval_runner.py
 
-# Verify live Gnani Timbre ⇄ Prisma round-trip (requires GNANI_API_KEY in .env)
-python verify_gnani_api.py
+# Verify live Gnani Timbre ⇄ Prisma round-trip (requires GNANI_API_KEY in .env or UI modal)
+.venv/bin/python verify_gnani_api.py
 ```
 
 ## Repository Layout
 ```
-PITCH.md                        # 1-page project pitch (Field 5)
+PITCH.md                        # 1-page project pitch
 EVALUATION.md                   # Benchmark report & acoustic/multilingual results
-HOW_TO_USE_AND_SUBMIT.md        # Setup, live API verification, 2-3 min demo script & submission guide
 .github/workflows/ci.yml        # Automated CI running pytest (46/46) & eval_runner
 backend/main.py                 # FastAPI REST + WebSocket streaming orchestrator
-backend/gnani_client.py         # Gnani Prisma v3.0 & Timbre v3.0 client (Semaphore(1), cache, resampler)
+backend/gnani_client.py         # Gnani Prisma v2.5/v3.0 & Timbre v2.5/v3.0 client (Semaphore(1), cache, resampler)
 backend/rsa_and_claim_rules.py  # Triage, RSA workflows, IRDAI FNOL calculator
 backend/i18n.py                 # Native-script templates & metadata for all 10 Gnani languages
 backend/eval_runner.py          # 20-case acoustic + 30-case 10-language + engineering layer evaluator
 backend/pipeline/{queues,endpointing,jitter_buffer,clause_buffer,barge_in,safety,brain}.py
-frontend/{index.html,style.css,app.js,demo_clips.html}
+frontend/{index.html,style.css,app.js}
 tests/test_bimavani.py          # 46 automated unit, WebSocket, DSP/PLC/PII, and 10-language tests
 ```
 

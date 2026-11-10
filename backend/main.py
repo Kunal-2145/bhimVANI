@@ -56,7 +56,6 @@ from backend.pipeline.barge_in import (
 from backend.pipeline.brain import Brain, llm_status, llm_warmup
 from backend.pipeline.clause_buffer import split_into_clauses
 from backend.pipeline.endpointing import (
-    EndpointingState,
     analyze_wav_endpoint,
     denoise_wav_for_stt,
     endpoint_turn,
@@ -133,18 +132,6 @@ async def _build_clause_payload(
         "fallback": bool(synth.get("fallback", False)),
     }
     return cp, wav
-
-
-async def _synthesize_one_clause(
-    c: Dict[str, Any],
-    sess: Optional[SessionPipeline] = None,
-    language: Optional[str] = None,
-) -> Dict[str, Any]:
-    cp, wav = await _build_clause_payload(c, language=language)
-    if sess is not None:
-        sess.output_jitter.push(c["index"], wav)
-        sess.output_jitter.drain_ready(force=True)
-    return cp
 
 
 async def _synthesize_clauses(

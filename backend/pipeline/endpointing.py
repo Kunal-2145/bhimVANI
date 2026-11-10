@@ -20,7 +20,6 @@ from dataclasses import dataclass, field
 from typing import Any, Deque, Dict, List, Tuple
 
 FRAME_MS = 20
-SUPPORT_RATES = {16000, 24000, 48000, 44100}
 DEFAULT_SPEECH_DBFS = -34.0     # base speech RMS gate
 DEFAULT_SILENCE_DBFS = -44.0    # base silence gate
 DEFAULT_VAD_SILENCE_MS = 600
@@ -255,9 +254,6 @@ class AutoVADDetector:
             "estimated_snr_db": self.estimated_snr_db,
             "in_speech": self._in_speech,
         }
-
-    def push_to_talk_active(self) -> bool:
-        return False
 
 
 def analyze_wav_endpoint(wav_bytes: bytes, state: EndpointingState) -> Dict[str, Any]:

@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import importlib.util
 import json
 import os
 import random
@@ -45,14 +46,7 @@ try:
 except Exception:
     pass
 
-try:  # optional SDK (non-fatal if absent)
-    from gnani import stt as _gnani_stt_sdk  # type: ignore
-    from gnani import tts as _gnani_tts_sdk  # type: ignore
-    _SDK_AVAILABLE = True
-except Exception:  # pragma: no cover
-    _gnani_stt_sdk = None
-    _gnani_tts_sdk = None
-    _SDK_AVAILABLE = False
+_SDK_AVAILABLE = importlib.util.find_spec("gnani") is not None
 
 # ---------------------------------------------------------------------------
 # Configuration (loaded from env at import; hot-reloadable via set_api_key)
@@ -116,12 +110,6 @@ def _load_config() -> GnaniConfig:
 
 
 CONFIG: GnaniConfig = _load_config()
-
-
-def reload_config() -> GnaniConfig:
-    global CONFIG
-    CONFIG = _load_config()
-    return CONFIG
 
 
 def _sem() -> asyncio.Semaphore:
@@ -307,7 +295,7 @@ async def transcribe_wav(
 
     if not live_mode():
         return {
-            "transcript": _fallback_transcript_hint(wav_bytes),
+            "transcript": "",
             "request_id": "fallback-" + hashlib.md5(wav_bytes or b"empty").hexdigest()[:8],
             "stt_latency_ms": round((time.perf_counter() - started) * 1000, 1),
             "model": m + " (fallback)",
@@ -409,10 +397,6 @@ async def transcribe_wav(
         "score": None,
         "error": last_err or "unreachable",
     }
-
-
-def _fallback_transcript_hint(wav_bytes: bytes) -> str:
-    return ""
 
 
 def _json_or_bow(resp: httpx.Response) -> Dict[str, Any]:
@@ -599,25 +583,3 @@ async def verify_round_trip(phrase: str = TEST_PHRASE) -> Dict[str, Any]:
         "sdk_available": _SDK_AVAILABLE,
         "live_mode": live_mode(),
     }
-
-
-# ---------------------------------------------------------------------------
-# (Optional) SDK adapters
-# ---------------------------------------------------------------------------
-
-def sdk_stt_client() -> Any:
-    if _SDK_AVAILABLE and _gnani_stt_sdk is not None:
-        try:
-            return _gnani_stt_sdk.GnaniSTTClient(api_key=CONFIG.api_key)
-        except Exception:
-            return None
-    return None
-
-
-def sdk_tts_client() -> Any:
-    if _SDK_AVAILABLE and _gnani_tts_sdk is not None:
-        try:
-            return _gnani_tts_sdk.GnaniTTSClient(api_key=CONFIG.api_key)
-        except Exception:
-            return None
-    return None

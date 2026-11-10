@@ -24,8 +24,6 @@ from typing import Any, Dict, List, Optional, Tuple
 from backend.i18n import (
     STRINGS,
     compose_localized_reply,
-    format_range,
-    localize_garage,
     normalize_lang_code,
     spoken_part_localized,
 )
@@ -147,11 +145,6 @@ _NON_POLICY_SUFFIX = re.compile(r"^\s*(?:rupaye|rupees|rs\.?|inr|km|kilomete?r|m
 def parse_spoken_numbers(text: str) -> List[int]:
     """Public helper: ordered unique integer candidates from the transcript."""
     return [int(v) for v, _neg in _parse_number_strings_detailed(text)]
-
-
-def _parse_numbers_detailed(text: str) -> List[Tuple[int, bool]]:
-    """Backwards-compatible integer view of candidate numbers + negation flags."""
-    return [(int(v), neg) for v, neg in _parse_number_strings_detailed(text)]
 
 
 def _parse_number_strings_detailed(text: str) -> List[Tuple[str, bool]]:
@@ -555,14 +548,6 @@ def _injury_keyword_negated_at(t: str, start: int, end: int) -> bool:
     return bool(_NEGATION_RE.search(local))
 
 
-def _injury_keyword_negated(t: str, keyword: str) -> bool:
-    """Backwards-compatible helper: True if every occurrence of keyword is negated."""
-    hits = list(re.finditer(r"(?<![a-z])" + re.escape(keyword) + r"(?![a-z])", t))
-    if not hits:
-        return False
-    return all(_injury_keyword_negated_at(t, m.start(), m.end()) for m in hits)
-
-
 def triage_injury_and_safety(transcript: str, language: str = "hi-IN") -> Dict[str, Any]:
     """Detect injury signal. If injured: HALT claim form-filling, raise
     112 ambulance + 1033 NHAI patrol + live human officer handoff.
@@ -605,7 +590,6 @@ def triage_injury_and_safety(transcript: str, language: str = "hi-IN") -> Dict[s
                 "halt_claim_intake": True,
                 "spoken_empathy": empathy_local,
                 "spoken_empathy_hi": STRINGS["hi-IN"]["inj_empathy"],
-                "spoken_empathy_ta": STRINGS["ta-IN"]["inj_empathy"],
                 "claim_intake_paused_reason": "Human safety > claim forms. FNOL resumed only after medical handoff.",
             }
         )
@@ -616,7 +600,6 @@ def triage_injury_and_safety(transcript: str, language: str = "hi-IN") -> Dict[s
             "halt_claim_intake": False,
             "spoken_empathy": safe_local,
             "spoken_empathy_hi": STRINGS["hi-IN"]["safe_empathy"],
-            "spoken_empathy_ta": STRINGS["ta-IN"]["safe_empathy"],
         })
     return out
 
@@ -700,11 +683,6 @@ def dispatch_smart_rsa(road_type: str, parts: List[str], is_drivable: bool,
                     "aur service bilkul FREE hogi. Sabse badi baat — aapke 20 percent No-Claim "
                     "Bonus salamat rahenge, isliye claim file bilkul mat kijiye."
                 ),
-                "do_not_claim_spoken_ta": (
-                    "நல்ல செய்தி! இது சிறிய பழுதுதான். 22 நிமிடங்களில் சாலை உதவி பணியாளர் "
-                    "உங்கள் இடத்திற்கு வருவார், இந்த சேவை முற்றிலும் இலவசம். காப்பீட்டு கோரிக்கை "
-                    "போட வேண்டாம் — உங்கள் இருபது சதவீத தள்ளுபடி சலுகை பாதுகாப்பாக இருக்கும்."
-                ),
             }
         )
         return out
@@ -721,9 +699,6 @@ def dispatch_smart_rsa(road_type: str, parts: List[str], is_drivable: bool,
                 "engine_warning": "🔴 Do NOT Start Engine! (radiator/axle/coolant/tyre damage risk)",
                 "engine_warning_spoken_hi": (
                     "Kripya gaadi start bilkul MAT kijiye — engine seize ho sakta hai."
-                ),
-                "engine_warning_spoken_ta": (
-                    "தயவுசெய்து வண்டியை ஸ்டார்ட் செய்யாதீர்கள் — என்ஜின் பழுதடைய வாய்ப்புள்ளது."
                 ),
                 "dispatch_vendor": wf["vendor"],
                 "dispatch_vendor_type": "flatbed_tow_truck",
@@ -761,9 +736,6 @@ def dispatch_smart_rsa(road_type: str, parts: List[str], is_drivable: bool,
             "photos_required": wf.get("photos_required", 4),
             "photo_instruction_spoken_hi": (
                 "Garage jaane se pehle number plate ke saath 4 photo zaroor kheench lein."
-            ),
-            "photo_instruction_spoken_ta": (
-                "பழுதுபார்க்கும் மையத்திற்குச் செல்லும் முன் எண் பலகை தெரியும்படி 4 புகைப்படங்கள் எடுத்துக்கொள்ளுங்கள்."
             ),
             "destination_garage": garage,
             "ncb_protected": False,
@@ -843,14 +815,9 @@ def calculate_irdai_claim_draft(policy_number: Optional[str], parts: List[str],
         "estimated_repair_high_inr": est_high,
         "estimated_range_display":
             f"₹{est_low:,} se ₹{est_high:,}" if est_high else "₹0 (RSA-covered minor job)",
-        "estimated_range_display_ta":
-            f"₹{est_low:,} முதல் ₹{est_high:,} வரை" if est_high else "₹0 (சாலை உதவி சிறிய பழுது)",
         "status_label": IRDAI["range_label"],
         "status_label_spoken_hi": (
             "Yeh anumaanit range hai — antim rashi surveyor nireekshan ke baad tay hogi."
-        ),
-        "status_label_spoken_ta": (
-            "இது மதிப்பீட்டுத் தொகை மட்டுமே — ஆய்வாளர் பரிசோதனைக்குப் பிறகு இறுதித் தொகை உறுதி செய்யப்படும்."
         ),
         "photos_required": 4,
         "age_of_vehicle_years": age_of_vehicle_years,
@@ -874,36 +841,6 @@ SPOKEN_PART: Dict[str, str] = {
     "fuel_out": "petrol khatam",
     "ev_system_stuck": "EV system",
 }
-
-SPOKEN_PART_TA: Dict[str, str] = {
-    "radiator": "ரேடியேட்டர்",
-    "bumper": "பம்பர்",
-    "headlight": "ஹெட்லைட்",
-    "side_mirror": "சைடு மிரர்",
-    "axle": "ஆக்ஸில்",
-    "puncture": "டயர் பஞ்சர்",
-    "battery": "பேட்டரி",
-    "front_guard": "முன் கார்டு",
-    "clutch_wire": "கிளட்ச் ஒயர்",
-    "fuel_out": "பெட்ரோல் காலி",
-    "ev_system_stuck": "மின்கல அமைப்பு",
-}
-
-_GARAGE_NAMES_TA: Dict[str, str] = {
-    "g_karnal_motors": "கர்னால் மோட்டார்ஸ் மையம்",
-    "g_karol_bagh_2w": "கரோல் பாக் இருசக்கர வாகன மையம்",
-    "g_meerut_2w": "மீரட் இருசக்கர வாகன மையம்",
-    "g_panipat_motors": "பானிபட் மோட்டார் வொர்க்ஸ் மையம்",
-    "g_chennai_ev": "சென்னை மின்சார வாகன பராமரிப்பு மையம்",
-    "g_delhi_motors": "டெல்லி என்.சி.ஆர். கேஷ்லெஸ் வாகன மையம்",
-    "g_rural_karnal_link": "கர்னால் லிங்க் ரோடு பழுதுபார்க்கும் மையம்",
-    "g_rural_panipat_4w": "பானிபட் கிராமப்புற பழுதுபார்க்கும் மையம்",
-}
-
-
-def _garage_name_for_lang(garage: Optional[Dict[str, Any]], language: str = "hi-IN") -> str:
-    lang = normalize_lang_code(language) or "hi-IN"
-    return localize_garage(garage, lang)
 
 
 def spoken_part(parts: List[str], language: str = "hi-IN") -> str:

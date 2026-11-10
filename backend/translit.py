@@ -625,11 +625,6 @@ def _indic_to_canonical(text: str) -> str:
     return re.sub(r"\s+", " ", work).strip()
 
 
-def tamil_to_canonical(text: str) -> str:
-    """Backwards-compatible alias for Tamil/Indic canonical normalization."""
-    return _indic_to_canonical(text)
-
-
 def to_hinglish(text: str) -> str:
     """Transliterate every Devanagari run in `text` to Roman Hinglish.
     Non-Devanagari text (English/numbers) passes through untouched."""
